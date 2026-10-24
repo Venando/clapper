@@ -187,13 +187,13 @@
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Next subtitle</property>
-                <property name="accelerator">&lt;Alt&gt;Right</property>
+                <property name="accelerator">End</property>
               </object>
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Previous subtitle</property>
-                <property name="accelerator">&lt;Alt&gt;Left</property>
+                <property name="accelerator">Home</property>
               </object>
             </child>
             <child>
