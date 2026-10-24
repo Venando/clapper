@@ -55,8 +55,6 @@ struct _ClapperAppWindow
   GtkWidget *video;
   ClapperGtkBillboard *billboard;
   ClapperGtkSimpleControls *simple_controls;
-  GtkRevealer *subtitles_osd;
-  GtkLabel *subtitles_osd_label;
 
   GtkDropTarget *drop_target;
   GtkCssProvider *provider;
@@ -66,7 +64,6 @@ struct _ClapperAppWindow
   GSettings *settings;
 
   guint seek_timeout;
-  guint subtitles_osd_timeout;
   guint resize_tick_id;
 
   gboolean key_held;
@@ -1090,36 +1087,16 @@ toggle_fullscreen (GSimpleAction *action, GVariant *param, gpointer user_data)
 }
 
 static void
-_hide_subtitles_osd_cb (gpointer user_data)
-{
-  ClapperAppWindow *self = CLAPPER_APP_WINDOW_CAST (user_data);
-
-  self->subtitles_osd_timeout = 0;
-  gtk_revealer_set_reveal_child (self->subtitles_osd, FALSE);
-}
-
-static void
-_show_subtitles_osd (ClapperAppWindow *self, gboolean enabled)
-{
-  gtk_label_set_text (self->subtitles_osd_label,
-      (enabled) ? _("Subtitles: On") : _("Subtitles: Off"));
-
-  g_clear_handle_id (&self->subtitles_osd_timeout, g_source_remove);
-  gtk_revealer_set_reveal_child (self->subtitles_osd, TRUE);
-  self->subtitles_osd_timeout = g_timeout_add_once (3000,
-      _hide_subtitles_osd_cb, self);
-}
-
-static void
 toggle_subtitles (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
   ClapperAppWindow *self = CLAPPER_APP_WINDOW_CAST (user_data);
-  ClapperPlayer *player = clapper_app_window_get_player (self);
-  gboolean enabled;
+  ClapperPlayer *player = clapper_gtk_av_get_player (CLAPPER_GTK_AV_CAST (self->video));
+  gboolean enabled = !clapper_player_get_subtitles_enabled (player);
 
-  enabled = !clapper_player_get_subtitles_enabled (player);
   clapper_player_set_subtitles_enabled (player, enabled);
-  _show_subtitles_osd (self, enabled);
+  clapper_gtk_billboard_post_message (self->billboard,
+      "media-view-subtitles-symbolic",
+      (enabled) ? _("Subtitles: On") : _("Subtitles: Off"));
 }
 
 static void
@@ -1414,7 +1391,6 @@ clapper_app_window_dispose (GObject *object)
   }
 
   g_clear_handle_id (&self->seek_timeout, g_source_remove);
-  g_clear_handle_id (&self->subtitles_osd_timeout, g_source_remove);
 
   gtk_widget_dispose_template (GTK_WIDGET (object), CLAPPER_APP_TYPE_WINDOW);
 
@@ -1461,8 +1437,6 @@ clapper_app_window_class_init (ClapperAppWindowClass *klass)
   gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, video);
   gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, billboard);
   gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, simple_controls);
-  gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, subtitles_osd);
-  gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, subtitles_osd_label);
   gtk_widget_class_bind_template_child (widget_class, ClapperAppWindow, drop_target);
 
   gtk_widget_class_bind_template_callback (widget_class, video_toggle_fullscreen_cb);
