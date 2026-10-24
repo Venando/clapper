@@ -17,6 +17,7 @@
 
 #include "config.h"
 
+#include <string.h>
 #include <glib/gi18n.h>
 #include <gtk/gtk.h>
 
@@ -251,6 +252,123 @@ clapper_app_utils_is_subtitles_file (GFile *file)
   }
 
   return is_subs;
+}
+
+static gboolean
+_parse_timestamp (const gchar *str, gdouble *seconds)
+{
+  gchar *copy, **parts;
+  gdouble total = 0;
+  guint i, n_parts;
+  gboolean success = TRUE;
+
+  copy = g_strstrip (g_strdup (str));
+  g_strdelimit (copy, ",", '.');
+
+  parts = g_strsplit (copy, ":", 0);
+  n_parts = g_strv_length (parts);
+
+  if (n_parts == 0 || n_parts > 3)
+    success = FALSE;
+
+  for (i = 0; success && i < n_parts; ++i) {
+    gchar *end = NULL;
+    gdouble value = g_ascii_strtod (parts[i], &end);
+
+    if (end == parts[i] || *end != '\0' || value < 0) {
+      success = FALSE;
+      break;
+    }
+    total = total * 60 + value;
+  }
+
+  g_strfreev (parts);
+  g_free (copy);
+
+  if (success)
+    *seconds = total;
+
+  return success;
+}
+
+static gint
+_compare_times (gconstpointer a, gconstpointer b)
+{
+  gdouble da = *(const gdouble *) a, db = *(const gdouble *) b;
+
+  return (da > db) - (da < db);
+}
+
+/*
+ * clapper_app_utils_load_subtitle_times:
+ * @uri: URI of an external subtitles file
+ *
+ * Reads cue start times (in seconds) from a local SRT, WebVTT
+ * or ASS/SSA file. Embedded subtitles are not supported.
+ *
+ * Returns: (transfer full) (nullable): sorted #GArray of #gdouble
+ *   start times, or %NULL if file could not be read or has no cues.
+ */
+GArray *
+clapper_app_utils_load_subtitle_times (const gchar *uri)
+{
+  GFile *file;
+  GArray *times = NULL;
+  gchar *contents = NULL;
+  gchar **lines;
+  guint i;
+
+  file = g_file_new_for_uri (uri);
+
+  if (!g_file_is_native (file)
+      || !g_file_load_contents (file, NULL, &contents, NULL, NULL, NULL)) {
+    g_object_unref (file);
+    return NULL;
+  }
+  g_object_unref (file);
+
+  times = g_array_new (FALSE, FALSE, sizeof (gdouble));
+  lines = g_strsplit (contents, "\n", 0);
+  g_free (contents);
+
+  for (i = 0; lines[i]; ++i) {
+    const gchar *line = lines[i];
+    gchar *start_str = NULL;
+    gdouble start;
+
+    if (g_str_has_prefix (line, "\xEF\xBB\xBF"))
+      line += 3;
+
+    if (g_str_has_prefix (line, "Dialogue:")) {
+      /* ASS/SSA: Dialogue: Layer,Start,End,... */
+      gchar **fields = g_strsplit (line + 9, ",", 3);
+
+      if (g_strv_length (fields) == 3)
+        start_str = g_strdup (fields[1]);
+      g_strfreev (fields);
+    } else {
+      /* SRT/WebVTT: [H:]MM:SS.mmm --> [H:]MM:SS.mmm */
+      const gchar *arrow = strstr (line, "-->");
+
+      if (arrow)
+        start_str = g_strndup (line, arrow - line);
+    }
+
+    if (start_str && _parse_timestamp (start_str, &start))
+      g_array_append_val (times, start);
+
+    g_free (start_str);
+  }
+  g_strfreev (lines);
+
+  if (times->len == 0) {
+    g_array_unref (times);
+    return NULL;
+  }
+
+  g_array_sort (times, _compare_times);
+
+  return times;
 }
 
 gboolean

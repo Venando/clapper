@@ -786,6 +786,8 @@ clapper_app_application_constructed (GObject *object)
     { "win.auto-resize", { "<Super>r", NULL, NULL }},
     { "win.show-help-overlay", { "<Control>question", NULL, NULL }},
     { "win.toggle-subtitles", { "<Alt>h", NULL, NULL }},
+    { "win.next-subtitle", { "<Alt>Right", NULL, NULL }},
+    { "win.previous-subtitle", { "<Alt>Left", NULL, NULL }},
     { "window.close", { "<Control>q", "q", NULL }},
   };
 

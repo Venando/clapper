@@ -67,6 +67,9 @@ struct _ClapperAppWindow
 
   guint seek_timeout;
   guint subtitles_osd_timeout;
+
+  GArray *subtitle_times;
+  gchar *subtitle_times_uri;
   guint resize_tick_id;
 
   gboolean key_held;
@@ -1099,15 +1102,21 @@ _hide_subtitles_osd_cb (gpointer user_data)
 }
 
 static void
-_show_subtitles_osd (ClapperAppWindow *self, gboolean enabled)
+_show_subtitles_osd_text (ClapperAppWindow *self, const gchar *text)
 {
-  gtk_label_set_text (self->subtitles_osd_label,
-      (enabled) ? _("Subtitles: On") : _("Subtitles: Off"));
+  gtk_label_set_text (self->subtitles_osd_label, text);
 
   g_clear_handle_id (&self->subtitles_osd_timeout, g_source_remove);
   gtk_revealer_set_reveal_child (self->subtitles_osd, TRUE);
   self->subtitles_osd_timeout = g_timeout_add_once (3000,
       _hide_subtitles_osd_cb, self);
+}
+
+static void
+_show_subtitles_osd (ClapperAppWindow *self, gboolean enabled)
+{
+  _show_subtitles_osd_text (self,
+      (enabled) ? _("Subtitles: On") : _("Subtitles: Off"));
 }
 
 static void
@@ -1120,6 +1129,97 @@ toggle_subtitles (GSimpleAction *action, GVariant *param, gpointer user_data)
   enabled = !clapper_player_get_subtitles_enabled (player);
   clapper_player_set_subtitles_enabled (player, enabled);
   _show_subtitles_osd (self, enabled);
+}
+
+/* Reloads cue times when external subtitles URI changes */
+static gboolean
+_ensure_subtitle_times (ClapperAppWindow *self, ClapperPlayer *player)
+{
+  ClapperQueue *queue = clapper_player_get_queue (player);
+  ClapperMediaItem *item = clapper_queue_get_current_item (queue);
+  gchar *suburi;
+
+  if (!item)
+    return FALSE;
+
+  suburi = clapper_media_item_get_suburi (item);
+  gst_object_unref (item);
+
+  if (!suburi) {
+    g_clear_pointer (&self->subtitle_times, g_array_unref);
+    g_clear_pointer (&self->subtitle_times_uri, g_free);
+    return FALSE;
+  }
+
+  if (g_strcmp0 (suburi, self->subtitle_times_uri) != 0) {
+    g_clear_pointer (&self->subtitle_times, g_array_unref);
+    g_free (self->subtitle_times_uri);
+
+    self->subtitle_times_uri = suburi;
+    self->subtitle_times = clapper_app_utils_load_subtitle_times (suburi);
+  } else {
+    g_free (suburi);
+  }
+
+  return (self->subtitle_times != NULL);
+}
+
+static void
+_jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
+{
+  ClapperPlayer *player = clapper_app_window_get_player (self);
+  gdouble position, offset, target = -1;
+  guint i;
+
+  if (!_ensure_subtitle_times (self, player)) {
+    _show_subtitles_osd_text (self, _("No external subtitles to jump to"));
+    return;
+  }
+
+  /* Playbin offset is in nanoseconds */
+  offset = clapper_player_get_subtitle_offset (player) / GST_SECOND;
+  position = clapper_player_get_position (player);
+
+  if (forward) {
+    for (i = 0; i < self->subtitle_times->len; ++i) {
+      gdouble time = g_array_index (self->subtitle_times, gdouble, i) + offset;
+
+      if (time > position + 0.1) {
+        target = time;
+        break;
+      }
+    }
+  } else {
+    /* Small margin so repeated presses do not stick on current cue */
+    for (i = self->subtitle_times->len; i > 0; --i) {
+      gdouble time = g_array_index (self->subtitle_times, gdouble, i - 1) + offset;
+
+      if (time < position - 0.5) {
+        target = time;
+        break;
+      }
+    }
+  }
+
+  if (target < 0) {
+    _show_subtitles_osd_text (self, (forward)
+        ? _("No next subtitle") : _("No previous subtitle"));
+    return;
+  }
+
+  clapper_player_seek (player, target);
+}
+
+static void
+next_subtitle (GSimpleAction *action, GVariant *param, gpointer user_data)
+{
+  _jump_to_subtitle (CLAPPER_APP_WINDOW_CAST (user_data), TRUE);
+}
+
+static void
+previous_subtitle (GSimpleAction *action, GVariant *param, gpointer user_data)
+{
+  _jump_to_subtitle (CLAPPER_APP_WINDOW_CAST (user_data), FALSE);
 }
 
 static void
@@ -1304,6 +1404,8 @@ clapper_app_window_constructed (GObject *object)
     { "auto-resize", auto_resize, NULL, NULL, NULL },
     { "show-help-overlay", show_help_overlay, NULL, NULL, NULL },
     { "toggle-subtitles", toggle_subtitles, NULL, NULL, NULL },
+    { "next-subtitle", next_subtitle, NULL, NULL, NULL },
+    { "previous-subtitle", previous_subtitle, NULL, NULL, NULL },
   };
 
 #if (CLAPPER_HAVE_MPRIS || CLAPPER_HAVE_SERVER || CLAPPER_HAVE_DISCOVERER)
@@ -1432,6 +1534,9 @@ clapper_app_window_finalize (GObject *object)
 
   g_object_unref (self->settings);
   g_object_unref (self->provider);
+
+  g_clear_pointer (&self->subtitle_times, g_array_unref);
+  g_free (self->subtitle_times_uri);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
