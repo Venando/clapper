@@ -108,12 +108,3 @@ clapper-app-queue-list .queue listview row {
 clapper-app-queue-list .queue listview.dnd row.activatable:not(:selected):hover {
   background: none;
 }
-
-window .subtitles-osd {
-  /* Same background as the other OSD widgets (see clapper-gtk styles.css) */
-  background-color: rgba(38,38,38,0.8);
-  padding: 8px 20px;
-  border-radius: 9999px;
-  font-weight: 600;
-  box-shadow: 0 2px 8px alpha(black, 0.35);
-}
