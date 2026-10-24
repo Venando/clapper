@@ -180,6 +180,12 @@
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Toggle subtitles</property>
+                <property name="accelerator">&lt;Alt&gt;h</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Speed up</property>
                 <property name="accelerator">greater</property>
               </object>
