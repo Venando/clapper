@@ -61,6 +61,12 @@ G_GNUC_INTERNAL
 GArray * clapper_app_utils_load_subtitle_times (const gchar *uri);
 
 G_GNUC_INTERNAL
+void clapper_app_utils_load_media_subtitle_times_async (const gchar *uri, guint stream_index, GCancellable *cancellable, GAsyncReadyCallback callback, gpointer user_data);
+
+G_GNUC_INTERNAL
+GArray * clapper_app_utils_load_media_subtitle_times_finish (GAsyncResult *result, GError **error);
+
+G_GNUC_INTERNAL
 gboolean clapper_app_utils_value_for_item_is_valid (const GValue *value);
 
 G_GNUC_INTERNAL

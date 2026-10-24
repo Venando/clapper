@@ -371,6 +371,268 @@ clapper_app_utils_load_subtitle_times (const gchar *uri)
   return times;
 }
 
+typedef struct
+{
+  GMutex lock;
+  GPtrArray *tracks;
+  GstElement *pipeline;
+} SubtitleScan;
+
+typedef struct
+{
+  SubtitleScan *scan;
+  gchar *stream_id;
+  GArray *times;
+} SubtitleTrack;
+
+typedef struct
+{
+  gchar *uri;
+  guint stream_index;
+} SubtitleScanRequest;
+
+static void
+_subtitle_track_free (SubtitleTrack *track)
+{
+  g_free (track->stream_id);
+  g_array_unref (track->times);
+  g_free (track);
+}
+
+static void
+_subtitle_scan_request_free (SubtitleScanRequest *req)
+{
+  g_free (req->uri);
+  g_free (req);
+}
+
+static gboolean
+_pad_is_text (GstPad *pad, gchar **stream_id)
+{
+  GstStream *stream;
+  GstStreamType type = GST_STREAM_TYPE_UNKNOWN;
+  GstCaps *caps;
+  const gchar *name;
+  gboolean is_text = FALSE;
+
+  if ((stream = gst_pad_get_stream (pad))) {
+    type = gst_stream_get_stream_type (stream);
+    *stream_id = g_strdup (gst_stream_get_stream_id (stream));
+    gst_object_unref (stream);
+  }
+  if (type != GST_STREAM_TYPE_UNKNOWN)
+    return (type & GST_STREAM_TYPE_TEXT) != 0;
+
+  caps = gst_pad_query_caps (pad, NULL);
+  if (!gst_caps_is_empty (caps) && !gst_caps_is_any (caps)) {
+    name = gst_structure_get_name (gst_caps_get_structure (caps, 0));
+
+    is_text = (g_str_has_prefix (name, "text/")
+        || g_str_has_prefix (name, "subpicture/")
+        || g_str_has_prefix (name, "application/x-ass")
+        || g_str_has_prefix (name, "application/x-ssa")
+        || g_str_has_prefix (name, "application/x-subtitle"));
+  }
+  gst_caps_unref (caps);
+
+  return is_text;
+}
+
+static GstPadProbeReturn
+_text_buffer_probe_cb (GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
+{
+  SubtitleTrack *track = user_data;
+  GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER (info);
+
+  if (buffer && GST_BUFFER_PTS_IS_VALID (buffer)
+      && gst_buffer_get_size (buffer) > 0) {
+    gdouble time = (gdouble) GST_BUFFER_PTS (buffer) / GST_SECOND;
+
+    g_mutex_lock (&track->scan->lock);
+    g_array_append_val (track->times, time);
+    g_mutex_unlock (&track->scan->lock);
+  }
+
+  return GST_PAD_PROBE_OK;
+}
+
+static void
+_scan_pad_added_cb (GstElement *parsebin, GstPad *pad, SubtitleScan *scan)
+{
+  GstElement *sink = gst_element_factory_make ("fakesink", NULL);
+  GstPad *sinkpad;
+  gchar *stream_id = NULL;
+
+  /* Every stream must go somewhere, but only text ones are inspected */
+  g_object_set (sink, "sync", FALSE, "async", FALSE, NULL);
+  gst_bin_add (GST_BIN_CAST (scan->pipeline), sink);
+
+  sinkpad = gst_element_get_static_pad (sink, "sink");
+
+  if (_pad_is_text (pad, &stream_id)) {
+    SubtitleTrack *track = g_new0 (SubtitleTrack, 1);
+
+    track->scan = scan;
+    track->stream_id = stream_id;
+    track->times = g_array_new (FALSE, FALSE, sizeof (gdouble));
+
+    g_mutex_lock (&scan->lock);
+    g_ptr_array_add (scan->tracks, track);
+    g_mutex_unlock (&scan->lock);
+
+    gst_pad_add_probe (sinkpad, GST_PAD_PROBE_TYPE_BUFFER,
+        _text_buffer_probe_cb, track, NULL);
+  } else {
+    g_free (stream_id);
+  }
+
+  gst_pad_link (pad, sinkpad);
+  gst_object_unref (sinkpad);
+
+  gst_element_sync_state_with_parent (sink);
+}
+
+static void
+_scan_subtitle_times_thread (GTask *task, gpointer source_object,
+    gpointer task_data, GCancellable *cancellable)
+{
+  SubtitleScanRequest *req = task_data;
+  SubtitleScan scan = { 0, };
+  SubtitleTrack *track = NULL;
+  GstElement *src, *parsebin;
+  GstStreamCollection *collection = NULL;
+  GstBus *bus;
+  GArray *times = NULL;
+  gboolean done = FALSE;
+  guint i;
+
+  src = gst_element_make_from_uri (GST_URI_SRC, req->uri, NULL, NULL);
+  parsebin = gst_element_factory_make ("parsebin", NULL);
+
+  if (!src || !parsebin) {
+    gst_clear_object (&src);
+    gst_clear_object (&parsebin);
+    g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_FAILED,
+        "Could not create subtitle scanning elements");
+    return;
+  }
+
+  g_mutex_init (&scan.lock);
+  scan.tracks = g_ptr_array_new_with_free_func ((GDestroyNotify) _subtitle_track_free);
+  scan.pipeline = gst_pipeline_new ("subtitle-scan");
+
+  gst_bin_add_many (GST_BIN_CAST (scan.pipeline), src, parsebin, NULL);
+  gst_element_link (src, parsebin);
+  g_signal_connect (parsebin, "pad-added", G_CALLBACK (_scan_pad_added_cb), &scan);
+
+  bus = gst_element_get_bus (scan.pipeline);
+  gst_element_set_state (scan.pipeline, GST_STATE_PLAYING);
+
+  while (!done && !g_cancellable_is_cancelled (cancellable)) {
+    GstMessage *msg = gst_bus_timed_pop_filtered (bus, 100 * GST_MSECOND,
+        GST_MESSAGE_EOS | GST_MESSAGE_ERROR | GST_MESSAGE_STREAM_COLLECTION);
+
+    if (!msg)
+      continue;
+
+    switch (GST_MESSAGE_TYPE (msg)) {
+      case GST_MESSAGE_STREAM_COLLECTION:
+        gst_clear_object (&collection);
+        gst_message_parse_stream_collection (msg, &collection);
+        break;
+      default:
+        done = TRUE;
+        break;
+    }
+    gst_message_unref (msg);
+  }
+
+  gst_element_set_state (scan.pipeline, GST_STATE_NULL);
+  gst_object_unref (bus);
+  gst_object_unref (scan.pipeline);
+
+  if (g_cancellable_is_cancelled (cancellable)) {
+    g_task_return_error_if_cancelled (task);
+    goto finish;
+  }
+
+  /* Pick the n-th text stream, ordered like the player lists them */
+  if (collection) {
+    guint n_streams = gst_stream_collection_get_size (collection);
+    guint text_index = 0;
+
+    for (i = 0; i < n_streams && !track; ++i) {
+      GstStream *stream = gst_stream_collection_get_stream (collection, i);
+      guint j;
+
+      if (!(gst_stream_get_stream_type (stream) & GST_STREAM_TYPE_TEXT))
+        continue;
+
+      if (text_index++ != req->stream_index)
+        continue;
+
+      for (j = 0; j < scan.tracks->len; ++j) {
+        SubtitleTrack *t = g_ptr_array_index (scan.tracks, j);
+
+        if (g_strcmp0 (t->stream_id, gst_stream_get_stream_id (stream)) == 0) {
+          track = t;
+          break;
+        }
+      }
+    }
+  }
+  if (!track && req->stream_index < scan.tracks->len)
+    track = g_ptr_array_index (scan.tracks, req->stream_index);
+
+  if (track && track->times->len > 0) {
+    times = g_array_ref (track->times);
+    g_array_sort (times, _compare_times);
+  }
+
+  if (times)
+    g_task_return_pointer (task, times, (GDestroyNotify) g_array_unref);
+  else
+    g_task_return_new_error (task, G_IO_ERROR, G_IO_ERROR_NOT_FOUND,
+        "No subtitle cues found");
+
+finish:
+  gst_clear_object (&collection);
+  g_ptr_array_unref (scan.tracks);
+  g_mutex_clear (&scan.lock);
+}
+
+/*
+ * clapper_app_utils_load_media_subtitle_times_async:
+ * @uri: URI of a local media file with embedded subtitles
+ * @stream_index: index among the media text streams
+ *
+ * Demuxes (without decoding) the file in a background thread to
+ * collect start times of the cues of an embedded subtitle stream.
+ */
+void
+clapper_app_utils_load_media_subtitle_times_async (const gchar *uri,
+    guint stream_index, GCancellable *cancellable,
+    GAsyncReadyCallback callback, gpointer user_data)
+{
+  GTask *task;
+  SubtitleScanRequest *req;
+
+  req = g_new0 (SubtitleScanRequest, 1);
+  req->uri = g_strdup (uri);
+  req->stream_index = stream_index;
+
+  task = g_task_new (NULL, cancellable, callback, user_data);
+  g_task_set_task_data (task, req, (GDestroyNotify) _subtitle_scan_request_free);
+  g_task_run_in_thread (task, _scan_subtitle_times_thread);
+  g_object_unref (task);
+}
+
+GArray *
+clapper_app_utils_load_media_subtitle_times_finish (GAsyncResult *result, GError **error)
+{
+  return g_task_propagate_pointer (G_TASK (result), error);
+}
+
 gboolean
 clapper_app_utils_value_for_item_is_valid (const GValue *value)
 {

@@ -69,7 +69,10 @@ struct _ClapperAppWindow
   guint subtitles_osd_timeout;
 
   GArray *subtitle_times;
-  gchar *subtitle_times_uri;
+  gchar *subtitle_times_key;
+  GCancellable *subtitle_load_cancellable;
+  gchar *subtitle_loading_key;
+  gboolean subtitle_pending_forward;
   guint resize_tick_id;
 
   gboolean key_held;
@@ -1131,50 +1134,39 @@ toggle_subtitles (GSimpleAction *action, GVariant *param, gpointer user_data)
   _show_subtitles_osd (self, enabled);
 }
 
-/* Reloads cue times when external subtitles URI changes */
-static gboolean
-_ensure_subtitle_times (ClapperAppWindow *self, ClapperPlayer *player)
+/* Cue times are cached per subtitle source (external file or embedded stream) */
+static gchar *
+_get_subtitle_source (ClapperPlayer *player, gchar **suburi, gchar **uri, guint *index)
 {
   ClapperQueue *queue = clapper_player_get_queue (player);
+  ClapperStreamList *streams = clapper_player_get_subtitle_streams (player);
   ClapperMediaItem *item = clapper_queue_get_current_item (queue);
-  gchar *suburi;
+  gchar *key;
 
   if (!item)
-    return FALSE;
+    return NULL;
 
-  suburi = clapper_media_item_get_suburi (item);
+  *suburi = clapper_media_item_get_suburi (item);
+  *uri = g_strdup (clapper_media_item_get_uri (item));
+  *index = clapper_stream_list_get_current_index (streams);
   gst_object_unref (item);
 
-  if (!suburi) {
-    g_clear_pointer (&self->subtitle_times, g_array_unref);
-    g_clear_pointer (&self->subtitle_times_uri, g_free);
-    return FALSE;
-  }
-
-  if (g_strcmp0 (suburi, self->subtitle_times_uri) != 0) {
-    g_clear_pointer (&self->subtitle_times, g_array_unref);
-    g_free (self->subtitle_times_uri);
-
-    self->subtitle_times_uri = suburi;
-    self->subtitle_times = clapper_app_utils_load_subtitle_times (suburi);
+  if (*suburi) {
+    key = g_strdup (*suburi);
+  } else if (*index != CLAPPER_STREAM_LIST_INVALID_POSITION && *uri) {
+    key = g_strdup_printf ("%s#%u", *uri, *index);
   } else {
-    g_free (suburi);
+    key = NULL;
   }
 
-  return (self->subtitle_times != NULL);
+  return key;
 }
 
 static void
-_jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
+_seek_to_subtitle (ClapperAppWindow *self, ClapperPlayer *player, gboolean forward)
 {
-  ClapperPlayer *player = clapper_app_window_get_player (self);
   gdouble position, offset, target = -1;
   guint i;
-
-  if (!_ensure_subtitle_times (self, player)) {
-    _show_subtitles_osd_text (self, _("No external subtitles to jump to"));
-    return;
-  }
 
   /* Playbin offset is in nanoseconds */
   offset = clapper_player_get_subtitle_offset (player) / GST_SECOND;
@@ -1208,6 +1200,108 @@ _jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
   }
 
   clapper_player_seek (player, target);
+}
+
+static void
+_media_subtitle_times_loaded_cb (GObject *source_object, GAsyncResult *result, gpointer user_data)
+{
+  ClapperAppWindow *self = CLAPPER_APP_WINDOW_CAST (user_data);
+  ClapperPlayer *player = clapper_app_window_get_player (self);
+  GError *error = NULL;
+  GArray *times;
+  gchar *key, *suburi = NULL, *uri = NULL;
+  guint index;
+
+  times = clapper_app_utils_load_media_subtitle_times_finish (result, &error);
+
+  if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+    /* Superseded by a newer request that owns the state now */
+    g_error_free (error);
+    g_object_unref (self);
+    return;
+  }
+  g_clear_error (&error);
+  g_clear_object (&self->subtitle_load_cancellable);
+
+  /* Ignore result when subtitle source changed in the meantime */
+  key = _get_subtitle_source (player, &suburi, &uri, &index);
+
+  if (times && g_strcmp0 (key, self->subtitle_loading_key) == 0) {
+    g_clear_pointer (&self->subtitle_times, g_array_unref);
+    g_free (self->subtitle_times_key);
+
+    self->subtitle_times = times;
+    self->subtitle_times_key = g_steal_pointer (&self->subtitle_loading_key);
+
+    _seek_to_subtitle (self, player, self->subtitle_pending_forward);
+  } else {
+    g_clear_pointer (&times, g_array_unref);
+    _show_subtitles_osd_text (self, _("No subtitles to jump to"));
+  }
+  g_clear_pointer (&self->subtitle_loading_key, g_free);
+
+  g_free (key);
+  g_free (suburi);
+  g_free (uri);
+  g_object_unref (self);
+}
+
+static void
+_jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
+{
+  ClapperPlayer *player = clapper_app_window_get_player (self);
+  gchar *key, *suburi = NULL, *uri = NULL;
+  guint index;
+
+  key = _get_subtitle_source (player, &suburi, &uri, &index);
+
+  if (!key) {
+    _show_subtitles_osd_text (self, _("No subtitles to jump to"));
+    goto finish;
+  }
+
+  if (g_strcmp0 (key, self->subtitle_times_key) == 0) {
+    _seek_to_subtitle (self, player, forward);
+    goto finish;
+  }
+
+  /* Already loading this very source, only update direction */
+  if (self->subtitle_load_cancellable
+      && g_strcmp0 (key, self->subtitle_loading_key) == 0) {
+    self->subtitle_pending_forward = forward;
+    goto finish;
+  }
+
+  g_cancellable_cancel (self->subtitle_load_cancellable);
+  g_clear_object (&self->subtitle_load_cancellable);
+  g_clear_pointer (&self->subtitle_loading_key, g_free);
+
+  g_clear_pointer (&self->subtitle_times, g_array_unref);
+  g_clear_pointer (&self->subtitle_times_key, g_free);
+
+  if (suburi)
+    self->subtitle_times = clapper_app_utils_load_subtitle_times (suburi);
+
+  if (self->subtitle_times) {
+    self->subtitle_times_key = g_strdup (key);
+    _seek_to_subtitle (self, player, forward);
+  } else if (uri && g_str_has_prefix (uri, "file:")) {
+    self->subtitle_loading_key = g_strdup (key);
+    self->subtitle_pending_forward = forward;
+    self->subtitle_load_cancellable = g_cancellable_new ();
+
+    _show_subtitles_osd_text (self, _("Loading subtitles…"));
+    clapper_app_utils_load_media_subtitle_times_async (uri,
+        (suburi) ? 0 : index, self->subtitle_load_cancellable,
+        _media_subtitle_times_loaded_cb, g_object_ref (self));
+  } else {
+    _show_subtitles_osd_text (self, _("No subtitles to jump to"));
+  }
+
+finish:
+  g_free (key);
+  g_free (suburi);
+  g_free (uri);
 }
 
 static void
@@ -1518,6 +1612,9 @@ clapper_app_window_dispose (GObject *object)
   g_clear_handle_id (&self->seek_timeout, g_source_remove);
   g_clear_handle_id (&self->subtitles_osd_timeout, g_source_remove);
 
+  g_cancellable_cancel (self->subtitle_load_cancellable);
+  g_clear_object (&self->subtitle_load_cancellable);
+
   gtk_widget_dispose_template (GTK_WIDGET (object), CLAPPER_APP_TYPE_WINDOW);
 
   gst_clear_object (&self->current_item);
@@ -1536,7 +1633,8 @@ clapper_app_window_finalize (GObject *object)
   g_object_unref (self->provider);
 
   g_clear_pointer (&self->subtitle_times, g_array_unref);
-  g_free (self->subtitle_times_uri);
+  g_free (self->subtitle_times_key);
+  g_free (self->subtitle_loading_key);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
