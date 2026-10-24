@@ -58,6 +58,9 @@ G_GNUC_INTERNAL
 gboolean clapper_app_utils_is_subtitles_file (GFile *file);
 
 G_GNUC_INTERNAL
+GArray * clapper_app_utils_load_subtitle_times (const gchar *uri);
+
+G_GNUC_INTERNAL
 gboolean clapper_app_utils_value_for_item_is_valid (const GValue *value);
 
 G_GNUC_INTERNAL
