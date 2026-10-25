@@ -72,6 +72,7 @@ struct _ClapperAppWindow
   gchar *subtitle_times_key;
   GCancellable *subtitle_load_cancellable;
   gchar *subtitle_loading_key;
+  gboolean subtitle_pending_jump;
   gboolean subtitle_pending_forward;
   guint resize_tick_id;
 
@@ -1233,11 +1234,16 @@ _media_subtitle_times_loaded_cb (GObject *source_object, GAsyncResult *result, g
     self->subtitle_times = times;
     self->subtitle_times_key = g_steal_pointer (&self->subtitle_loading_key);
 
-    _seek_to_subtitle (self, player, self->subtitle_pending_forward);
+    if (self->subtitle_pending_jump)
+      _seek_to_subtitle (self, player, self->subtitle_pending_forward);
   } else {
     g_clear_pointer (&times, g_array_unref);
-    _show_subtitles_osd_text (self, _("No subtitles to jump to"));
+
+    /* Silent when this was only a background prefetch */
+    if (self->subtitle_pending_jump)
+      _show_subtitles_osd_text (self, _("No subtitles to jump to"));
   }
+  self->subtitle_pending_jump = FALSE;
   g_clear_pointer (&self->subtitle_loading_key, g_free);
 
   g_free (key);
@@ -1246,8 +1252,10 @@ _media_subtitle_times_loaded_cb (GObject *source_object, GAsyncResult *result, g
   g_object_unref (self);
 }
 
+/* With @jump set, seeks once cue times are available. Otherwise it only
+ * makes sure they get loaded (in background) so that the first jump is instant */
 static void
-_jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
+_load_subtitle_times (ClapperAppWindow *self, gboolean jump, gboolean forward)
 {
   ClapperPlayer *player = clapper_app_window_get_player (self);
   gchar *key, *suburi = NULL, *uri = NULL;
@@ -1256,25 +1264,32 @@ _jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
   key = _get_subtitle_source (player, &suburi, &uri, &index);
 
   if (!key) {
-    _show_subtitles_osd_text (self, _("No subtitles to jump to"));
+    if (jump)
+      _show_subtitles_osd_text (self, _("No subtitles to jump to"));
     goto finish;
   }
 
   if (g_strcmp0 (key, self->subtitle_times_key) == 0) {
-    _seek_to_subtitle (self, player, forward);
+    if (jump)
+      _seek_to_subtitle (self, player, forward);
     goto finish;
   }
 
-  /* Already loading this very source, only update direction */
+  /* Already loading this very source, only update what to do when done */
   if (self->subtitle_load_cancellable
       && g_strcmp0 (key, self->subtitle_loading_key) == 0) {
-    self->subtitle_pending_forward = forward;
+    if (jump) {
+      self->subtitle_pending_jump = TRUE;
+      self->subtitle_pending_forward = forward;
+      _show_subtitles_osd_text (self, _("Loading subtitles…"));
+    }
     goto finish;
   }
 
   g_cancellable_cancel (self->subtitle_load_cancellable);
   g_clear_object (&self->subtitle_load_cancellable);
   g_clear_pointer (&self->subtitle_loading_key, g_free);
+  self->subtitle_pending_jump = FALSE;
 
   g_clear_pointer (&self->subtitle_times, g_array_unref);
   g_clear_pointer (&self->subtitle_times_key, g_free);
@@ -1284,17 +1299,22 @@ _jump_to_subtitle (ClapperAppWindow *self, gboolean forward)
 
   if (self->subtitle_times) {
     self->subtitle_times_key = g_strdup (key);
-    _seek_to_subtitle (self, player, forward);
+
+    if (jump)
+      _seek_to_subtitle (self, player, forward);
   } else if (uri && g_str_has_prefix (uri, "file:")) {
     self->subtitle_loading_key = g_strdup (key);
+    self->subtitle_pending_jump = jump;
     self->subtitle_pending_forward = forward;
     self->subtitle_load_cancellable = g_cancellable_new ();
 
-    _show_subtitles_osd_text (self, _("Loading subtitles…"));
+    if (jump)
+      _show_subtitles_osd_text (self, _("Loading subtitles…"));
+
     clapper_app_utils_load_media_subtitle_times_async (uri,
         (suburi) ? 0 : index, self->subtitle_load_cancellable,
         _media_subtitle_times_loaded_cb, g_object_ref (self));
-  } else {
+  } else if (jump) {
     _show_subtitles_osd_text (self, _("No subtitles to jump to"));
   }
 
@@ -1305,15 +1325,22 @@ finish:
 }
 
 static void
+_subtitle_stream_changed_cb (ClapperStreamList *streams,
+    GParamSpec *pspec G_GNUC_UNUSED, ClapperAppWindow *self)
+{
+  _load_subtitle_times (self, FALSE, TRUE);
+}
+
+static void
 next_subtitle (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
-  _jump_to_subtitle (CLAPPER_APP_WINDOW_CAST (user_data), TRUE);
+  _load_subtitle_times (CLAPPER_APP_WINDOW_CAST (user_data), TRUE, TRUE);
 }
 
 static void
 previous_subtitle (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
-  _jump_to_subtitle (CLAPPER_APP_WINDOW_CAST (user_data), FALSE);
+  _load_subtitle_times (CLAPPER_APP_WINDOW_CAST (user_data), TRUE, FALSE);
 }
 
 static void
@@ -1565,6 +1592,8 @@ clapper_app_window_constructed (GObject *object)
    * after application window is contructed */
   g_signal_connect (queue, "notify::current-item",
       G_CALLBACK (_queue_current_item_changed_cb), self);
+  g_signal_connect (clapper_player_get_subtitle_streams (player),
+      "notify::current-index", G_CALLBACK (_subtitle_stream_changed_cb), self);
   g_signal_connect (player, "notify::adaptive-bandwidth",
       G_CALLBACK (_player_adaptive_bandwidth_changed_cb), NULL);
 
