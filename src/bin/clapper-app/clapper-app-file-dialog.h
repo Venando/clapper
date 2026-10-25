@@ -28,6 +28,9 @@ G_GNUC_INTERNAL
 void clapper_app_file_dialog_open_files (GtkApplication *gtk_app);
 
 G_GNUC_INTERNAL
+void clapper_app_file_dialog_open_folder (GtkApplication *gtk_app);
+
+G_GNUC_INTERNAL
 void clapper_app_file_dialog_open_subtitles (GtkApplication *gtk_app, ClapperMediaItem *item);
 
 G_GNUC_INTERNAL

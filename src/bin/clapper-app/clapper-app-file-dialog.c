@@ -51,6 +51,24 @@ _open_files_cb (GtkFileDialog *dialog, GAsyncResult *result, GtkApplication *gtk
 }
 
 static void
+_open_folder_cb (GtkFileDialog *dialog, GAsyncResult *result, GtkApplication *gtk_app)
+{
+  GError *error = NULL;
+  GFile *folder = gtk_file_dialog_select_folder_finish (dialog, result, &error);
+
+  if (G_LIKELY (error == NULL)) {
+    g_application_open (G_APPLICATION (gtk_app), &folder, 1, "add-only");
+  } else {
+    if (error->domain != GTK_DIALOG_ERROR || error->code != GTK_DIALOG_ERROR_DISMISSED) {
+      g_printerr ("Error: %s\n",
+          (error->message) ? error->message : "Could not open file dialog");
+    }
+    g_error_free (error);
+  }
+  g_clear_object (&folder);
+}
+
+static void
 _open_subtitles_cb (GtkFileDialog *dialog, GAsyncResult *result, ClapperMediaItem *item)
 {
   GError *error = NULL;
@@ -154,6 +172,22 @@ clapper_app_file_dialog_open_files (GtkApplication *gtk_app)
 
   gtk_file_dialog_open_multiple (dialog, window, NULL,
       (GAsyncReadyCallback) _open_files_cb,
+      gtk_app);
+
+  g_object_unref (dialog);
+}
+
+void
+clapper_app_file_dialog_open_folder (GtkApplication *gtk_app)
+{
+  GtkWindow *window = gtk_application_get_active_window (gtk_app);
+  GtkFileDialog *dialog = gtk_file_dialog_new ();
+
+  gtk_file_dialog_set_modal (dialog, TRUE);
+  gtk_file_dialog_set_title (dialog, "Add Folder");
+
+  gtk_file_dialog_select_folder (dialog, window, NULL,
+      (GAsyncReadyCallback) _open_folder_cb,
       gtk_app);
 
   g_object_unref (dialog);

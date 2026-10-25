@@ -179,6 +179,10 @@
         <attribute name="action">app.add-files</attribute>
       </item>
       <item>
+        <attribute name="label" translatable="yes">Add Folder…</attribute>
+        <attribute name="action">app.add-folder</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Add URI…</attribute>
         <attribute name="action">app.add-uri</attribute>
       </item>
