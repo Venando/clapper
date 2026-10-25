@@ -346,6 +346,14 @@ add_files (GSimpleAction *action, GVariant *param, gpointer user_data)
 }
 
 static void
+add_folder (GSimpleAction *action, GVariant *param, gpointer user_data)
+{
+  GtkApplication *gtk_app = GTK_APPLICATION (user_data);
+
+  clapper_app_file_dialog_open_folder (gtk_app);
+}
+
+static void
 add_uri (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
   GtkApplication *gtk_app = GTK_APPLICATION (user_data);
@@ -722,8 +730,20 @@ clapper_app_application_open (GApplication *app,
   if (!handled) {
     gint i;
 
-    for (i = 0; i < n_files; ++i)
-      add_item_from_file (files[i], queue);
+    for (i = 0; i < n_files; ++i) {
+      /* Folders add all their media files, naturally sorted */
+      if (clapper_app_utils_is_directory (files[i])) {
+        GPtrArray *dir_files = clapper_app_utils_list_media_files_in_dir (files[i]);
+        guint j;
+
+        for (j = 0; j < dir_files->len; ++j)
+          add_item_from_file (g_ptr_array_index (dir_files, j), queue);
+
+        g_ptr_array_unref (dir_files);
+      } else {
+        add_item_from_file (files[i], queue);
+      }
+    }
   }
 
   add_only = (g_strcmp0 (hint, "add-only") == 0);
@@ -765,6 +785,7 @@ clapper_app_application_constructed (GObject *object)
   };
   static const GActionEntry app_actions[] = {
     { "add-files", add_files, NULL, NULL, NULL },
+    { "add-folder", add_folder, NULL, NULL, NULL },
     { "add-uri", add_uri, NULL, NULL, NULL },
     { "clear-queue", clear_queue, NULL, NULL, NULL },
     { "new-window", new_window, NULL, NULL, NULL },
@@ -775,6 +796,7 @@ clapper_app_application_constructed (GObject *object)
   };
   static const ClapperAppShortcut app_shortcuts[] = {
     { "app.add-files", { "<Control>o", NULL, NULL }},
+    { "app.add-folder", { "<Control><Shift>o", NULL, NULL }},
     { "app.add-uri", { "<Control>u", NULL, NULL }},
     { "app.new-window", { "<Control>n", NULL, NULL }},
     { "app.info", { "<Control>i", NULL, NULL }},

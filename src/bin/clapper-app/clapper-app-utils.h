@@ -58,6 +58,12 @@ G_GNUC_INTERNAL
 gboolean clapper_app_utils_is_subtitles_file (GFile *file);
 
 G_GNUC_INTERNAL
+gboolean clapper_app_utils_is_directory (GFile *file);
+
+G_GNUC_INTERNAL
+GPtrArray * clapper_app_utils_list_media_files_in_dir (GFile *dir);
+
+G_GNUC_INTERNAL
 /* Used when a cue does not have a (valid) end time */
 #define CLAPPER_APP_SUBTITLE_FALLBACK_DURATION 5.0
 

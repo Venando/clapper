@@ -223,6 +223,111 @@ clapper_app_utils_parse_progression (ClapperQueueProgressionMode mode,
 }
 
 gboolean
+clapper_app_utils_is_directory (GFile *file)
+{
+  return (g_file_query_file_type (file,
+      G_FILE_QUERY_INFO_NONE, NULL) == G_FILE_TYPE_DIRECTORY);
+}
+
+typedef struct
+{
+  gchar *key;
+  GFile *file;
+} DirEntry;
+
+static void
+_dir_entry_free (DirEntry *entry)
+{
+  g_free (entry->key);
+  g_object_unref (entry->file);
+  g_free (entry);
+}
+
+static gint
+_dir_entry_compare (const DirEntry **a, const DirEntry **b)
+{
+  return strcmp ((*a)->key, (*b)->key);
+}
+
+static gboolean
+_is_media_content_type (const gchar *content_type)
+{
+  return (content_type
+      && (g_str_has_prefix (content_type, "video/")
+      || g_str_has_prefix (content_type, "audio/")
+      || g_str_equal (content_type, "application/claps")));
+}
+
+/*
+ * clapper_app_utils_list_media_files_in_dir:
+ * @dir: a directory #GFile
+ *
+ * Lists media files placed directly in @dir (not recursive, hidden files
+ * skipped), sorted alphabetically with natural number ordering
+ * (so "ep2" comes before "ep10").
+ *
+ * Returns: (transfer container) (element-type GFile): sorted array of files.
+ */
+GPtrArray *
+clapper_app_utils_list_media_files_in_dir (GFile *dir)
+{
+  GFileEnumerator *dir_enum;
+  GPtrArray *entries, *files;
+  guint i;
+
+  entries = g_ptr_array_new_with_free_func ((GDestroyNotify) _dir_entry_free);
+  files = g_ptr_array_new_with_free_func (g_object_unref);
+
+  if ((dir_enum = g_file_enumerate_children (dir,
+      G_FILE_ATTRIBUTE_STANDARD_NAME ","
+      G_FILE_ATTRIBUTE_STANDARD_DISPLAY_NAME ","
+      G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+      G_FILE_ATTRIBUTE_STANDARD_IS_HIDDEN ","
+      G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+      G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE,
+      G_FILE_QUERY_INFO_NONE, NULL, NULL))) {
+    while (TRUE) {
+      GFileInfo *info = NULL;
+      GFile *child = NULL;
+      const gchar *content_type;
+      DirEntry *entry;
+
+      if (!g_file_enumerator_iterate (dir_enum, &info, &child, NULL, NULL) || !info)
+        break;
+
+      if (g_file_info_get_file_type (info) == G_FILE_TYPE_DIRECTORY
+          || g_file_info_get_is_hidden (info))
+        continue;
+
+      content_type = g_file_info_get_content_type (info);
+      if (!content_type)
+        content_type = g_file_info_get_attribute_string (info,
+            G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE);
+
+      if (!_is_media_content_type (content_type))
+        continue;
+
+      entry = g_new (DirEntry, 1);
+      entry->key = g_utf8_collate_key_for_filename (
+          g_file_info_get_name (info), -1);
+      entry->file = g_object_ref (child);
+      g_ptr_array_add (entries, entry);
+    }
+    g_object_unref (dir_enum);
+  }
+
+  g_ptr_array_sort (entries, (GCompareFunc) _dir_entry_compare);
+
+  for (i = 0; i < entries->len; ++i) {
+    DirEntry *entry = g_ptr_array_index (entries, i);
+    g_ptr_array_add (files, g_object_ref (entry->file));
+  }
+  g_ptr_array_unref (entries);
+
+  return files;
+}
+
+gboolean
 clapper_app_utils_is_subtitles_file (GFile *file)
 {
   GFileInfo *info;
