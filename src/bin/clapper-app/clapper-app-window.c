@@ -1175,20 +1175,38 @@ _seek_to_subtitle (ClapperAppWindow *self, ClapperPlayer *player, gboolean forwa
 
   if (forward) {
     for (i = 0; i < self->subtitle_times->len; ++i) {
-      gdouble time = g_array_index (self->subtitle_times, gdouble, i) + offset;
+      ClapperAppSubtitleCue *cue = &g_array_index (self->subtitle_times, ClapperAppSubtitleCue, i);
+      gdouble start = cue->start + offset;
 
-      if (time > position + 0.1) {
-        target = time;
+      if (start > position + 0.1) {
+        target = start;
         break;
       }
     }
   } else {
-    /* Small margin so repeated presses do not stick on current cue */
-    for (i = self->subtitle_times->len; i > 0; --i) {
-      gdouble time = g_array_index (self->subtitle_times, gdouble, i - 1) + offset;
+    /* Go before the cue(s) displayed right now, so we never land on them.
+     * When nothing is displayed, go before the current position. */
+    gdouble reference = position;
 
-      if (time < position - 0.5) {
-        target = time;
+    for (i = 0; i < self->subtitle_times->len; ++i) {
+      ClapperAppSubtitleCue *cue = &g_array_index (self->subtitle_times, ClapperAppSubtitleCue, i);
+      gdouble start = cue->start + offset;
+
+      if (start > position)
+        break;
+      if (position < cue->end + offset) {
+        reference = start;
+        break;
+      }
+    }
+
+    /* Small margin, so a cue we just seeked to is not picked again */
+    for (i = self->subtitle_times->len; i > 0; --i) {
+      ClapperAppSubtitleCue *cue = &g_array_index (self->subtitle_times, ClapperAppSubtitleCue, i - 1);
+      gdouble start = cue->start + offset;
+
+      if (start < reference - 0.05) {
+        target = start;
         break;
       }
     }

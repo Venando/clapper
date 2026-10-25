@@ -294,7 +294,8 @@ _parse_timestamp (const gchar *str, gdouble *seconds)
 static gint
 _compare_times (gconstpointer a, gconstpointer b)
 {
-  gdouble da = *(const gdouble *) a, db = *(const gdouble *) b;
+  gdouble da = ((const ClapperAppSubtitleCue *) a)->start;
+  gdouble db = ((const ClapperAppSubtitleCue *) b)->start;
 
   return (da > db) - (da < db);
 }
@@ -303,11 +304,11 @@ _compare_times (gconstpointer a, gconstpointer b)
  * clapper_app_utils_load_subtitle_times:
  * @uri: URI of an external subtitles file
  *
- * Reads cue start times (in seconds) from a local SRT, WebVTT
+ * Reads cue times (in seconds) from a local SRT, WebVTT
  * or ASS/SSA file. Embedded subtitles are not supported.
  *
- * Returns: (transfer full) (nullable): sorted #GArray of #gdouble
- *   start times, or %NULL if file could not be read or has no cues.
+ * Returns: (transfer full) (nullable): #GArray of #ClapperAppSubtitleCue
+ *   sorted by start time, or %NULL if file could not be read or has no cues.
  */
 GArray *
 clapper_app_utils_load_subtitle_times (const gchar *uri)
@@ -327,14 +328,14 @@ clapper_app_utils_load_subtitle_times (const gchar *uri)
   }
   g_object_unref (file);
 
-  times = g_array_new (FALSE, FALSE, sizeof (gdouble));
+  times = g_array_new (FALSE, FALSE, sizeof (ClapperAppSubtitleCue));
   lines = g_strsplit (contents, "\n", 0);
   g_free (contents);
 
   for (i = 0; lines[i]; ++i) {
     const gchar *line = lines[i];
-    gchar *start_str = NULL;
-    gdouble start;
+    gchar *start_str = NULL, *end_str = NULL;
+    ClapperAppSubtitleCue cue;
 
     if (g_str_has_prefix (line, "\xEF\xBB\xBF"))
       line += 3;
@@ -343,21 +344,40 @@ clapper_app_utils_load_subtitle_times (const gchar *uri)
       /* ASS/SSA: Dialogue: Layer,Start,End,... */
       gchar **fields = g_strsplit (line + 9, ",", 3);
 
-      if (g_strv_length (fields) == 3)
+      if (g_strv_length (fields) == 3) {
+        gchar **times_fields = g_strsplit (fields[2], ",", 2);
+
         start_str = g_strdup (fields[1]);
+        end_str = g_strdup (times_fields[0]);
+        g_strfreev (times_fields);
+      }
       g_strfreev (fields);
     } else {
       /* SRT/WebVTT: [H:]MM:SS.mmm --> [H:]MM:SS.mmm */
       const gchar *arrow = strstr (line, "-->");
 
-      if (arrow)
+      if (arrow) {
+        gchar *end;
+
         start_str = g_strndup (line, arrow - line);
+
+        /* WebVTT may put cue settings after the end timestamp */
+        end_str = g_strstrip (g_strdup (arrow + 3));
+        for (end = end_str; *end && !g_ascii_isspace (*end); ++end);
+        *end = '\0';
+      }
     }
 
-    if (start_str && _parse_timestamp (start_str, &start))
-      g_array_append_val (times, start);
+    if (start_str && _parse_timestamp (start_str, &cue.start)) {
+      if (!end_str || !_parse_timestamp (end_str, &cue.end)
+          || cue.end <= cue.start)
+        cue.end = cue.start + CLAPPER_APP_SUBTITLE_FALLBACK_DURATION;
+
+      g_array_append_val (times, cue);
+    }
 
     g_free (start_str);
+    g_free (end_str);
   }
   g_strfreev (lines);
 
@@ -446,10 +466,15 @@ _text_buffer_probe_cb (GstPad *pad, GstPadProbeInfo *info, gpointer user_data)
 
   if (buffer && GST_BUFFER_PTS_IS_VALID (buffer)
       && gst_buffer_get_size (buffer) > 0) {
-    gdouble time = (gdouble) GST_BUFFER_PTS (buffer) / GST_SECOND;
+    ClapperAppSubtitleCue cue;
+
+    cue.start = (gdouble) GST_BUFFER_PTS (buffer) / GST_SECOND;
+    cue.end = (GST_BUFFER_DURATION_IS_VALID (buffer) && GST_BUFFER_DURATION (buffer) > 0)
+        ? cue.start + (gdouble) GST_BUFFER_DURATION (buffer) / GST_SECOND
+        : cue.start + CLAPPER_APP_SUBTITLE_FALLBACK_DURATION;
 
     g_mutex_lock (&track->scan->lock);
-    g_array_append_val (track->times, time);
+    g_array_append_val (track->times, cue);
     g_mutex_unlock (&track->scan->lock);
   }
 
@@ -474,7 +499,7 @@ _scan_pad_added_cb (GstElement *parsebin, GstPad *pad, SubtitleScan *scan)
 
     track->scan = scan;
     track->stream_id = stream_id;
-    track->times = g_array_new (FALSE, FALSE, sizeof (gdouble));
+    track->times = g_array_new (FALSE, FALSE, sizeof (ClapperAppSubtitleCue));
 
     g_mutex_lock (&scan->lock);
     g_ptr_array_add (scan->tracks, track);
