@@ -25,6 +25,8 @@
 #include <gio/gio.h>
 
 #include "clapper-stream-list-private.h"
+#include "clapper-audio-stream.h"
+#include "clapper-subtitle-stream.h"
 #include "clapper-stream-private.h"
 #include "clapper-player-private.h"
 #include "clapper-playbin-bus-private.h"
@@ -42,6 +44,10 @@ struct _ClapperStreamList
   guint current_index;
 
   gboolean in_refresh;
+
+  /* Audio/subtitles preference kept from previously played media */
+  gchar *pref_lang;
+  gchar *pref_title;
 };
 
 enum
@@ -332,6 +338,94 @@ clapper_stream_list_get_n_streams (ClapperStreamList *self)
   return g_list_model_get_n_items (G_LIST_MODEL (self));
 }
 
+/* Language code of audio/subtitle stream, %NULL for other types */
+static gchar *
+_get_stream_lang_code (ClapperStream *stream)
+{
+  switch (clapper_stream_get_stream_type (stream)) {
+    case CLAPPER_STREAM_TYPE_AUDIO:
+      return clapper_audio_stream_get_lang_code (CLAPPER_AUDIO_STREAM_CAST (stream));
+    case CLAPPER_STREAM_TYPE_SUBTITLE:
+      return clapper_subtitle_stream_get_lang_code (CLAPPER_SUBTITLE_STREAM_CAST (stream));
+    default:
+      return NULL;
+  }
+}
+
+/* Remember what was selected in list before it gets replaced. Only audio
+ * and subtitle streams are remembered, so media without them keeps
+ * the previous preference. Must be called without lock. */
+static void
+_remember_current_stream (ClapperStreamList *self)
+{
+  ClapperStreamType type;
+  gchar *lang, *title;
+
+  if (!self->current_stream)
+    return;
+
+  type = clapper_stream_get_stream_type (self->current_stream);
+  if (type != CLAPPER_STREAM_TYPE_AUDIO && type != CLAPPER_STREAM_TYPE_SUBTITLE)
+    return;
+
+  lang = _get_stream_lang_code (self->current_stream);
+  title = clapper_stream_get_title (self->current_stream);
+
+  /* Nothing to identify stream by */
+  if (!lang && !title) {
+    g_free (lang);
+    g_free (title);
+    return;
+  }
+
+  g_free (self->pref_lang);
+  g_free (self->pref_title);
+  self->pref_lang = lang;
+  self->pref_title = title;
+
+  GST_DEBUG_OBJECT (self, "Remembered stream preference, lang: %s, title: %s",
+      GST_STR_NULL (lang), GST_STR_NULL (title));
+}
+
+/* Find new stream that best matches remembered one (same language and title,
+ * then same language, then same title). Must be called without lock. */
+static gboolean
+_find_preferred_index (ClapperStreamList *self, guint *index)
+{
+  gint lang_match = -1, title_match = -1;
+  guint i;
+
+  if (!self->pref_lang && !self->pref_title)
+    return FALSE;
+
+  for (i = 0; i < self->streams->len; ++i) {
+    ClapperStream *stream = g_ptr_array_index (self->streams, i);
+    gchar *lang = _get_stream_lang_code (stream);
+    gchar *title = clapper_stream_get_title (stream);
+    gboolean same_lang = (self->pref_lang && g_strcmp0 (lang, self->pref_lang) == 0);
+    gboolean same_title = (self->pref_title && g_strcmp0 (title, self->pref_title) == 0);
+
+    g_free (lang);
+    g_free (title);
+
+    if (same_lang && (same_title || !self->pref_title)) {
+      *index = i;
+      return TRUE;
+    }
+    if (same_lang && lang_match < 0)
+      lang_match = i;
+    if (same_title && title_match < 0)
+      title_match = i;
+  }
+
+  if (lang_match >= 0 || title_match >= 0) {
+    *index = (lang_match >= 0) ? lang_match : title_match;
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
 void
 clapper_stream_list_replace_streams (ClapperStreamList *self, GList *streams)
 {
@@ -339,6 +433,8 @@ clapper_stream_list_replace_streams (ClapperStreamList *self, GList *streams)
   guint prev_n_streams, n_streams;
   guint index = 0, selected_index = 0;
   gboolean changed, selected = FALSE;
+
+  _remember_current_stream (self);
 
   GST_OBJECT_LOCK (self);
 
@@ -388,6 +484,10 @@ clapper_stream_list_replace_streams (ClapperStreamList *self, GList *streams)
       g_object_notify_by_pspec (G_OBJECT (self), param_specs[PROP_N_STREAMS]);
   }
 
+  /* Prefer stream matching the one selected for previously played media */
+  if (n_streams > 0 && _find_preferred_index (self, &selected_index))
+    GST_DEBUG_OBJECT (self, "Selecting preferred stream index: %u", selected_index);
+
   /* This can happen when ALL streams had "unselect" flag.
    * In this case just select the first one. */
   if (n_streams > 0) {
@@ -396,9 +496,6 @@ clapper_stream_list_replace_streams (ClapperStreamList *self, GList *streams)
   } else {
     selected_index = CLAPPER_STREAM_LIST_INVALID_POSITION;
   }
-
-  /* TODO: Consider adding an API (or signal that returns index)
-   * to select preferred initial stream (by e.g. language) */
 
   GST_OBJECT_LOCK (self);
   changed = clapper_stream_list_select_index_unlocked (self, selected_index);
@@ -460,6 +557,9 @@ clapper_stream_list_finalize (GObject *object)
 
   gst_clear_object (&self->current_stream);
   g_ptr_array_unref (self->streams);
+
+  g_free (self->pref_lang);
+  g_free (self->pref_title);
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
