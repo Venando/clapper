@@ -1170,6 +1170,40 @@ cycle_subtitle_stream (GSimpleAction *action, GVariant *param, gpointer user_dat
   gst_object_unref (stream);
 }
 
+static void
+cycle_audio_stream (GSimpleAction *action, GVariant *param, gpointer user_data)
+{
+  ClapperAppWindow *self = CLAPPER_APP_WINDOW_CAST (user_data);
+  ClapperPlayer *player = clapper_app_window_get_player (self);
+  ClapperStreamList *streams = clapper_player_get_audio_streams (player);
+  ClapperStream *stream;
+  guint n_streams, index;
+  gchar *name, *text;
+
+  if ((n_streams = g_list_model_get_n_items (G_LIST_MODEL (streams))) == 0) {
+    _show_subtitles_osd_text (self, _("Audio: Not available"));
+    return;
+  }
+
+  index = clapper_stream_list_get_current_index (streams);
+  index = (index == CLAPPER_STREAM_LIST_INVALID_POSITION) ? 0 : (index + 1) % n_streams;
+
+  clapper_stream_list_select_index (streams, index);
+
+  stream = clapper_stream_list_get_stream (streams, index);
+
+  if (!(name = clapper_stream_get_title (stream)))
+    name = clapper_audio_stream_get_lang_name (CLAPPER_AUDIO_STREAM_CAST (stream));
+
+  text = g_strdup_printf ("%s: %s (%u/%u)", _("Audio"),
+      (name) ? name : _("Undetermined"), index + 1, n_streams);
+  _show_subtitles_osd_text (self, text);
+
+  g_free (name);
+  g_free (text);
+  gst_object_unref (stream);
+}
+
 /* Cue times are cached per subtitle source (external file or embedded stream) */
 static gchar *
 _get_subtitle_source (ClapperPlayer *player, gchar **suburi, gchar **uri, guint *index)
@@ -1579,6 +1613,7 @@ clapper_app_window_constructed (GObject *object)
     { "show-help-overlay", show_help_overlay, NULL, NULL, NULL },
     { "toggle-subtitles", toggle_subtitles, NULL, NULL, NULL },
     { "cycle-subtitle-stream", cycle_subtitle_stream, NULL, NULL, NULL },
+    { "cycle-audio-stream", cycle_audio_stream, NULL, NULL, NULL },
     { "next-subtitle", next_subtitle, NULL, NULL, NULL },
     { "previous-subtitle", previous_subtitle, NULL, NULL, NULL },
   };

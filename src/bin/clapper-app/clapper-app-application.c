@@ -842,6 +842,7 @@ clapper_app_application_constructed (GObject *object)
     { "win.show-help-overlay", { "<Control>question", NULL, NULL }},
     { "win.toggle-subtitles", { "<Alt>h", NULL, NULL }},
     { "win.cycle-subtitle-stream", { "<Alt>l", NULL, NULL }},
+    { "win.cycle-audio-stream", { "<Alt>a", NULL, NULL }},
     { "win.next-subtitle", { "End", NULL, NULL }},
     { "win.previous-subtitle", { "Home", NULL, NULL }},
     { "window.close", { "<Control>q", "q", NULL }},

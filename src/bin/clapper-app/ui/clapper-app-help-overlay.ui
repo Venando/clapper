@@ -192,6 +192,12 @@
             </child>
             <child>
               <object class="GtkShortcutsShortcut">
+                <property name="title" translatable="yes">Cycle audio track</property>
+                <property name="accelerator">&lt;Alt&gt;a</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkShortcutsShortcut">
                 <property name="title" translatable="yes">Next subtitle</property>
                 <property name="accelerator">End</property>
               </object>
