@@ -229,6 +229,36 @@ clapper_app_utils_is_directory (GFile *file)
       G_FILE_QUERY_INFO_NONE, NULL) == G_FILE_TYPE_DIRECTORY);
 }
 
+gboolean
+clapper_app_utils_is_audio_video_file (GFile *file)
+{
+  GFileInfo *info;
+  gboolean is_av = FALSE;
+
+  if ((info = g_file_query_info (file,
+      G_FILE_ATTRIBUTE_STANDARD_TYPE ","
+      G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+      G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE,
+      G_FILE_QUERY_INFO_NONE,
+      NULL, NULL))) {
+    const gchar *content_type = g_file_info_get_content_type (info);
+
+    if (!content_type) {
+      content_type = g_file_info_get_attribute_string (info,
+          G_FILE_ATTRIBUTE_STANDARD_FAST_CONTENT_TYPE);
+    }
+
+    is_av = (g_file_info_get_file_type (info) == G_FILE_TYPE_REGULAR
+        && content_type
+        && (g_str_has_prefix (content_type, "video/")
+        || g_str_has_prefix (content_type, "audio/")));
+
+    g_object_unref (info);
+  }
+
+  return is_av;
+}
+
 typedef struct
 {
   gchar *key;

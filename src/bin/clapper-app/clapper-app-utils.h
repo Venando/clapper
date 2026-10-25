@@ -61,6 +61,9 @@ G_GNUC_INTERNAL
 gboolean clapper_app_utils_is_directory (GFile *file);
 
 G_GNUC_INTERNAL
+gboolean clapper_app_utils_is_audio_video_file (GFile *file);
+
+G_GNUC_INTERNAL
 GPtrArray * clapper_app_utils_list_media_files_in_dir (GFile *dir);
 
 G_GNUC_INTERNAL

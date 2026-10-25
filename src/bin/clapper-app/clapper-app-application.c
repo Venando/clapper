@@ -686,7 +686,7 @@ clapper_app_application_open (GApplication *app,
   GtkWindow *window;
   ClapperPlayer *player;
   ClapperQueue *queue;
-  guint n_before;
+  guint n_before, select_index;
   gboolean add_only, handled = FALSE;
 
   GST_INFO ("Open");
@@ -708,6 +708,8 @@ clapper_app_application_open (GApplication *app,
   queue = clapper_player_get_queue (player);
 
   n_before = clapper_queue_get_n_items (queue);
+  select_index = n_before;
+  add_only = (g_strcmp0 (hint, "add-only") == 0);
 
   /* Special path for opening video with subtitles at once */
   if (n_files == 2) {
@@ -724,6 +726,39 @@ clapper_app_application_open (GApplication *app,
 
       add_item_with_subtitles (
           files[media_index], files[subs_index], queue);
+    }
+  }
+
+  /* Opening a single audio/video file adds all other media files from
+   * the same folder (naturally sorted) and starts playing the opened one */
+  if (!handled && !add_only && n_files == 1
+      && clapper_app_utils_is_audio_video_file (files[0])) {
+    GFile *parent = g_file_get_parent (files[0]);
+
+    if (parent) {
+      GPtrArray *dir_files = clapper_app_utils_list_media_files_in_dir (parent);
+      guint j;
+
+      for (j = 0; j < dir_files->len; ++j) {
+        if (g_file_equal (g_ptr_array_index (dir_files, j), files[0])) {
+          handled = TRUE;
+          break;
+        }
+      }
+
+      if (handled) {
+        for (j = 0; j < dir_files->len; ++j) {
+          GFile *dir_file = g_ptr_array_index (dir_files, j);
+
+          if (g_file_equal (dir_file, files[0]))
+            select_index = n_before + j;
+
+          add_item_from_file (dir_file, queue);
+        }
+      }
+
+      g_ptr_array_unref (dir_files);
+      g_object_unref (parent);
     }
   }
 
@@ -746,12 +781,10 @@ clapper_app_application_open (GApplication *app,
     }
   }
 
-  add_only = (g_strcmp0 (hint, "add-only") == 0);
-
   /* Select first thing from added item to play (behave like "open" should),
    * when queue was empty first item is automatically selected */
-  if (!add_only && n_before > 0)
-    clapper_queue_select_index (queue, n_before);
+  if (!add_only && (n_before > 0 || select_index > 0))
+    clapper_queue_select_index (queue, select_index);
 
   g_application_unmark_busy (app);
 }
