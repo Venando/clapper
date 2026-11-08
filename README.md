@@ -1,4 +1,10 @@
 # Clapper
+> **Unofficial fork** of [rafostar/clapper](https://github.com/Rafostar/clapper), not affiliated with upstream.
+> Adds folder queueing, `Alt+A` / `Alt+L` audio and subtitle track cycling, `Home` / `End` subtitle jumping
+> (including embedded subtitles) and audio/subtitle selection memory.
+> See [FORK.md](FORK.md) for the full list of changes and install instructions, or run:
+> `curl -fsSL https://raw.githubusercontent.com/Venando/clapper/master/install.sh | bash`
+
 [![Flatpak](https://github.com/Rafostar/clapper/actions/workflows/flatpak.yml/badge.svg?event=push)](https://github.com/Rafostar/clapper/actions/workflows/flatpak.yml)
 [![Flatpak Nightly](https://github.com/Rafostar/clapper/actions/workflows/flatpak-nightly.yml/badge.svg?event=schedule)](https://github.com/Rafostar/clapper/actions/workflows/flatpak-nightly.yml)
 [![Crowdin](https://badges.crowdin.net/clapper/localized.svg)](https://crowdin.com/project/clapper)

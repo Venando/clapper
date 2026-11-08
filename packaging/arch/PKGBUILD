@@ -1,0 +1,29 @@
+# Maintainer: Venando
+# Unofficial fork of Clapper (https://github.com/Rafostar/clapper).
+# Build and install with:  makepkg -si
+pkgname=clapper-modified
+pkgver=0.11.0
+pkgrel=1
+pkgdesc="Unofficial Clapper fork with folder queueing, subtitle/audio track shortcuts and stream preference memory"
+arch=(x86_64)
+url="https://github.com/Venando/clapper"
+license=(GPL-3.0-or-later LGPL-2.1-or-later)
+depends=(dconf gcc-libs glib2 glibc graphene graphviz gstreamer gtk4
+         hicolor-icon-theme libadwaita libmicrodns libpeas-2 libsoup3 pango
+         gst-plugins-base gst-plugins-base-libs gst-plugins-good)
+makedepends=(git meson gobject-introspection vala)
+# Official Arch splits this into clapper, libclapper and libclapper-gtk
+provides=("clapper=$pkgver" "libclapper=$pkgver" "libclapper-gtk=$pkgver"
+          "libclapper-0.0.so=0-64" "libclapper-gtk-0.0.so=0-64")
+conflicts=(clapper libclapper libclapper-gtk)
+source=("clapper::git+https://github.com/Venando/clapper.git#branch=master")
+sha256sums=(SKIP)
+
+build() {
+  arch-meson clapper build
+  meson compile -C build
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+}
