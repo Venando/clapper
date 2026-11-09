@@ -1,7 +1,6 @@
 src/bin/clapper-app/data/applications/com.github.rafostar.Clapper.desktop.in
 src/bin/clapper-app/ui/clapper-app-audio-stream-list-item.ui
 src/bin/clapper-app/ui/clapper-app-headerbar.ui
-src/bin/clapper-app/ui/clapper-app-help-overlay.ui
 src/bin/clapper-app/ui/clapper-app-info-window.ui
 src/bin/clapper-app/ui/clapper-app-initial-state.ui
 src/bin/clapper-app/ui/clapper-app-preferences-window.ui
@@ -16,6 +15,7 @@ src/bin/clapper-app/clapper-app-info-window.c
 src/bin/clapper-app/clapper-app-list-item-utils.c
 src/bin/clapper-app/clapper-app-preferences-window.c
 src/bin/clapper-app/clapper-app-shortcut-dialog.c
+src/bin/clapper-app/clapper-app-shortcuts-editor.c
 src/bin/clapper-app/clapper-app-shortcuts.c
 src/bin/clapper-app/clapper-app-utils.c
 src/bin/clapper-app/clapper-app-window.c

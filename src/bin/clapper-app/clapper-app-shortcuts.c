@@ -44,11 +44,11 @@ static const ClapperAppShortcutInfo shortcut_infos[] = {
   { "about", "app.about", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_GENERAL,
       N_("About"), FALSE, { "F1", NULL }, { NULL }},
   { "toggle-fullscreen", "win.toggle-fullscreen", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_GENERAL,
-      N_("Toggle fullscreen"), FALSE, { "F11", "f", NULL }, { NULL }},
+      N_("Toggle fullscreen"), FALSE, { "F11", "f", NULL }, { NULL }, N_("Double tap | Double click")},
   { "unfullscreen", "win.unfullscreen", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_GENERAL,
       N_("Unfullscreen"), FALSE, { "Escape", NULL }, { NULL }},
   { "auto-resize", "win.auto-resize", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_GENERAL,
-      N_("Auto window resize"), FALSE, { "<Super>r", NULL }, { NULL }},
+      N_("Auto window resize"), FALSE, { "<Super>r", NULL }, { NULL }, N_("Middle click")},
   { "quit", "window.close", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_GENERAL,
       N_("Quit"), FALSE, { "<Control>q", "q", NULL }, { NULL }},
 
@@ -70,15 +70,15 @@ static const ClapperAppShortcutInfo shortcut_infos[] = {
 
   /* Playback */
   { "toggle-play", NULL, CLAPPER_APP_SHORTCUT_KEY_TOGGLE_PLAY, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
-      N_("Toggle play"), FALSE, { "space", "k", NULL }, { NULL }},
+      N_("Toggle play"), FALSE, { "space", "k", NULL }, { NULL }, N_("Tap | Left click")},
   { "seek-forward", NULL, CLAPPER_APP_SHORTCUT_KEY_SEEK_FORWARD, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
-      N_("Seek forward"), TRUE, { "Right", "l", NULL }, { "Left", "j", NULL }},
+      N_("Seek forward"), TRUE, { "Right", "l", NULL }, { "Left", "j", NULL }, N_("Double tap (right side) | Scroll right"), N_("Double tap (left side) | Scroll left")},
   { "seek-backward", NULL, CLAPPER_APP_SHORTCUT_KEY_SEEK_BACKWARD, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
-      N_("Seek backward"), TRUE, { "Left", "j", NULL }, { "Right", "l", NULL }},
+      N_("Seek backward"), TRUE, { "Left", "j", NULL }, { "Right", "l", NULL }, N_("Double tap (left side) | Scroll left"), N_("Double tap (right side) | Scroll right")},
   { "volume-up", NULL, CLAPPER_APP_SHORTCUT_KEY_VOLUME_UP, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
-      N_("Volume up"), TRUE, { "Up", NULL }, { NULL }},
+      N_("Volume up"), TRUE, { "Up", NULL }, { NULL }, N_("Scroll up")},
   { "volume-down", NULL, CLAPPER_APP_SHORTCUT_KEY_VOLUME_DOWN, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
-      N_("Volume down"), TRUE, { "Down", NULL }, { NULL }},
+      N_("Volume down"), TRUE, { "Down", NULL }, { NULL }, N_("Scroll down")},
   { "toggle-mute", NULL, CLAPPER_APP_SHORTCUT_KEY_TOGGLE_MUTE, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
       N_("Toggle mute"), FALSE, { "m", NULL }, { NULL }},
   { "toggle-subtitles", "win.toggle-subtitles", CLAPPER_APP_SHORTCUT_KEY_NONE, CLAPPER_APP_SHORTCUT_GROUP_PLAYBACK,
@@ -117,7 +117,8 @@ struct _ClapperAppShortcuts
   GObject parent;
 
   GSettings *settings;
-  GPtrArray *parsed; // ClapperAppParsedAccel of window handled shortcuts
+  gboolean has_key; // FALSE when schema is older than this code
+  GPtrArray *parsed; // ClapperAppParsedAccel of all shortcuts
 };
 
 enum
@@ -207,6 +208,9 @@ _dup_override (ClapperAppShortcuts *self, const ClapperAppShortcutInfo *info)
   GVariant *all, *value;
   gchar **strv = NULL;
 
+  if (!self->has_key)
+    return NULL;
+
   all = g_settings_get_value (self->settings, SETTINGS_KEY);
   value = g_variant_lookup_value (all, info->id, G_VARIANT_TYPE_STRING_ARRAY);
 
@@ -225,6 +229,11 @@ _dup_override (ClapperAppShortcuts *self, const ClapperAppShortcutInfo *info)
     }
 
     strv = g_strv_builder_end (builder);
+
+    /* Only garbage stored (e.g. edited by hand), use defaults instead of
+     * silently disabling the shortcut. Empty list stored on purpose is fine. */
+    if (g_strv_length (raw) > 0 && g_strv_length (strv) == 0)
+      g_clear_pointer (&strv, g_strfreev);
 
     g_strv_builder_unref (builder);
     g_strfreev (raw);
@@ -247,9 +256,6 @@ _rebuild_parsed (ClapperAppShortcuts *self)
     const ClapperAppShortcutInfo *info = &shortcut_infos[i];
     gchar **accels;
     guint j;
-
-    if (info->key == CLAPPER_APP_SHORTCUT_KEY_NONE)
-      continue;
 
     accels = clapper_app_shortcuts_get_accels (self, info);
 
@@ -360,6 +366,9 @@ _store_override (ClapperAppShortcuts *self, const ClapperAppShortcutInfo *info,
   GVariantIter iter;
   gchar *key;
   GVariant *value;
+
+  if (!self->has_key)
+    return;
 
   all = g_settings_get_value (self->settings, SETTINGS_KEY);
   g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sas}"));
@@ -476,7 +485,8 @@ clapper_app_shortcuts_reset (ClapperAppShortcuts *self, const ClapperAppShortcut
 void
 clapper_app_shortcuts_reset_all (ClapperAppShortcuts *self)
 {
-  g_settings_reset (self->settings, SETTINGS_KEY);
+  if (self->has_key)
+    g_settings_reset (self->settings, SETTINGS_KEY);
 }
 
 void
@@ -498,75 +508,13 @@ clapper_app_shortcuts_apply (ClapperAppShortcuts *self, GtkApplication *applicat
   }
 }
 
-const ClapperAppShortcutInfo *
-clapper_app_shortcuts_match_event (ClapperAppShortcuts *self, GdkEvent *event)
+static inline void
+_canonical_from_keyval (guint keyval, GdkModifierType state, GdkModifierType consumed,
+    guint *out_keyval, GdkModifierType *out_mods)
 {
-  GdkKeyMatch wanted;
-
-  if (!event || gdk_event_get_event_type (event) != GDK_KEY_PRESS)
-    return NULL;
-
-  /* First look for exact matches, then for ones that match only when
-   * current keyboard layout is ignored. This way a shortcut still works when
-   * other than latin layout is active (e.g. "k" works with the key that
-   * types "л" in Russian layout) while layout specific ones are preferred. */
-  for (wanted = GDK_KEY_MATCH_EXACT; wanted >= GDK_KEY_MATCH_PARTIAL; --wanted) {
-    guint i;
-
-    for (i = 0; i < self->parsed->len; ++i) {
-      ClapperAppParsedAccel *parsed = g_ptr_array_index (self->parsed, i);
-
-      if (gdk_key_event_matches (event, parsed->keyval, parsed->mods) == wanted)
-        return parsed->info;
-    }
-  }
-
-  return NULL;
-}
-
-gchar *
-clapper_app_shortcuts_accel_from_event (GdkEvent *event)
-{
-  GdkDisplay *display;
-  guint keyval, keycode, lower;
-  GdkModifierType state, consumed, mask, mods;
-
-  if (!event || gdk_event_get_event_type (event) != GDK_KEY_PRESS)
-    return NULL;
-
-  if (gdk_key_event_is_modifier (event))
-    return NULL;
-
-  display = gdk_event_get_display (event);
-  keyval = gdk_key_event_get_keyval (event);
-  keycode = gdk_key_event_get_keycode (event);
-  state = gdk_event_get_modifier_state (event);
-  consumed = gdk_key_event_get_consumed_modifiers (event);
-  mask = gtk_accelerator_get_default_mod_mask ();
-
-  /* Key that types a layout specific character (e.g. cyrillic letter).
-   * Use what the same physical key types in a latin layout (if any is
-   * set up), so stored shortcut works no matter which layout is active. */
-  if (gdk_keyval_to_unicode (keyval) > 0x7f) {
-    gint group;
-
-    for (group = 0; group < MAX_LAYOUT_GROUPS; ++group) {
-      guint latin_keyval = 0;
-      gint effective_group, level;
-      GdkModifierType latin_consumed;
-
-      if (gdk_display_translate_key (display, keycode, state & GDK_SHIFT_MASK,
-          group, &latin_keyval, &effective_group, &level, &latin_consumed)
-          && effective_group == group
-          && latin_keyval >= 0x20 && latin_keyval < 0x7f) {
-        keyval = latin_keyval;
-        consumed = latin_consumed;
-        break;
-      }
-    }
-  }
-
-  lower = gdk_keyval_to_lower (keyval);
+  GdkModifierType mask = gtk_accelerator_get_default_mod_mask ();
+  guint lower = gdk_keyval_to_lower (keyval);
+  GdkModifierType mods;
 
   if (lower != keyval) {
     /* Letters: Shift is an explicit part of the shortcut */
@@ -583,8 +531,128 @@ clapper_app_shortcuts_accel_from_event (GdkEvent *event)
     mods |= GDK_SHIFT_MASK;
   }
 
+  *out_keyval = keyval;
+  *out_mods = mods;
+}
+
+/* What the same physical key types in keyboard layout (group) number @group.
+ * Returns FALSE if there is no such layout or it types no printable character. */
+static gboolean
+_translate_in_group (GdkEvent *event, gint group, guint *keyval, GdkModifierType *consumed)
+{
+  GdkModifierType state = gdk_event_get_modifier_state (event);
+  gint effective_group, level;
+
+  *keyval = 0;
+  *consumed = 0;
+
+  /* Only Shift picks level of a key, other modifiers are not part of it */
+  if (!gdk_display_translate_key (gdk_event_get_display (event),
+      gdk_key_event_get_keycode (event), state & GDK_SHIFT_MASK, group,
+      keyval, &effective_group, &level, consumed))
+    return FALSE;
+
+  return (effective_group == group && *keyval >= 0x20 && *keyval < 0x7f);
+}
+
+const ClapperAppShortcutInfo *
+clapper_app_shortcuts_match_event (ClapperAppShortcuts *self, GdkEvent *event)
+{
+  GdkModifierType state;
+  guint i;
+  gint group;
+
+  if (!event || gdk_event_get_event_type (event) != GDK_KEY_PRESS)
+    return NULL;
+
+  /* Typed character in currently active layout always wins */
+  for (i = 0; i < self->parsed->len; ++i) {
+    ClapperAppParsedAccel *parsed = g_ptr_array_index (self->parsed, i);
+
+    if (gdk_key_event_matches (event, parsed->keyval, parsed->mods) == GDK_KEY_MATCH_EXACT)
+      return parsed->info;
+  }
+
+  /* Then look at what this physical key types in every other layout. We do
+   * it ourselves instead of relying on GDK "partial" matches, as those need
+   * same shift level and are skipped when active layout has the wanted
+   * character anywhere else, which breaks e.g. "<" and ">" in Ukrainian. */
+  state = gdk_event_get_modifier_state (event);
+
+  for (group = 0; group < MAX_LAYOUT_GROUPS; ++group) {
+    guint keyval;
+    GdkModifierType consumed, mods;
+
+    if (!_translate_in_group (event, group, &keyval, &consumed))
+      continue;
+
+    _canonical_from_keyval (keyval, state, consumed, &keyval, &mods);
+
+    for (i = 0; i < self->parsed->len; ++i) {
+      ClapperAppParsedAccel *parsed = g_ptr_array_index (self->parsed, i);
+
+      if (parsed->keyval == keyval && parsed->mods == mods)
+        return parsed->info;
+    }
+  }
+
+  /* Non-printable keys (arrows, F-keys) are the same in all layouts */
+  {
+    guint keyval;
+    GdkModifierType mods;
+
+    _canonical_from_keyval (gdk_key_event_get_keyval (event), state,
+        gdk_key_event_get_consumed_modifiers (event), &keyval, &mods);
+
+    for (i = 0; i < self->parsed->len; ++i) {
+      ClapperAppParsedAccel *parsed = g_ptr_array_index (self->parsed, i);
+
+      if (parsed->keyval == keyval && parsed->mods == mods)
+        return parsed->info;
+    }
+  }
+
+  return NULL;
+}
+
+gchar *
+clapper_app_shortcuts_accel_from_event (GdkEvent *event)
+{
+  guint keyval;
+  GdkModifierType state, consumed, mods;
+  gint group;
+
+  if (!event || gdk_event_get_event_type (event) != GDK_KEY_PRESS)
+    return NULL;
+
+  if (gdk_key_event_is_modifier (event))
+    return NULL;
+
+  keyval = gdk_key_event_get_keyval (event);
+  state = gdk_event_get_modifier_state (event);
+  consumed = gdk_key_event_get_consumed_modifiers (event);
+
+  /* Keys that type a character: store the one from first layout that has
+   * a latin character on this key, so the shortcut is the same no matter
+   * which layout was active when it was recorded (and matches the same
+   * physical key later). Function keys etc. are left as they are. */
+  if (gdk_keyval_to_unicode (keyval) != 0) {
+    for (group = 0; group < MAX_LAYOUT_GROUPS; ++group) {
+      guint latin_keyval;
+      GdkModifierType latin_consumed;
+
+      if (_translate_in_group (event, group, &latin_keyval, &latin_consumed)) {
+        keyval = latin_keyval;
+        consumed = latin_consumed;
+        break;
+      }
+    }
+  }
+
   if (keyval == 0)
     return NULL;
+
+  _canonical_from_keyval (keyval, state, consumed, &keyval, &mods);
 
   return gtk_accelerator_name (keyval, mods);
 }
@@ -592,8 +660,19 @@ clapper_app_shortcuts_accel_from_event (GdkEvent *event)
 static void
 clapper_app_shortcuts_init (ClapperAppShortcuts *self)
 {
+  GSettingsSchema *schema = NULL;
+
   self->settings = g_settings_new (CLAPPER_APP_ID);
   self->parsed = g_ptr_array_new_with_free_func (g_free);
+
+  /* Do not crash (GSettings aborts on unknown keys) if installed schema
+   * is older than this code, only run with default shortcuts then */
+  g_object_get (self->settings, "settings-schema", &schema, NULL);
+  self->has_key = g_settings_schema_has_key (schema, SETTINGS_KEY);
+  g_settings_schema_unref (schema);
+
+  if (!self->has_key)
+    g_warning ("Settings schema has no \"" SETTINGS_KEY "\" key, shortcuts cannot be customized");
 
   _rebuild_parsed (self);
 

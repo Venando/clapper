@@ -69,6 +69,8 @@ typedef struct
   gboolean repeatable; /* whether holding the key repeats the shortcut */
   const gchar *defaults[CLAPPER_APP_SHORTCUTS_MAX_ACCELS + 1];
   const gchar *defaults_rtl[CLAPPER_APP_SHORTCUTS_MAX_ACCELS + 1]; /* NULL = same as LTR */
+  const gchar *subtitle; /* untranslated, hint about other ways to do the same */
+  const gchar *subtitle_rtl; /* NULL = same as LTR */
 } ClapperAppShortcutInfo;
 
 G_GNUC_INTERNAL

@@ -25,8 +25,7 @@
 #include "clapper-app-application.h"
 #include "clapper-app-file-dialog.h"
 #include "clapper-app-utils.h"
-#include "clapper-app-shortcuts.h"
-#include "clapper-app-shortcut-dialog.h"
+#include "clapper-app-shortcuts-editor.h"
 
 #define GST_CAT_DEFAULT clapper_app_preferences_window_debug
 GST_DEBUG_CATEGORY_STATIC (GST_CAT_DEFAULT);
@@ -47,7 +46,6 @@ struct _ClapperAppPreferencesWindow
   GtkFontDialogButton *font_dialog_button;
 
   AdwPreferencesPage *shortcuts_page;
-  GPtrArray *shortcut_rows;
 
   GtkStack *enhancers_stack;
   GtkWidget *browse_enhancers_page;
@@ -867,183 +865,6 @@ clapper_app_preferences_window_new (GtkApplication *gtk_app)
   return GTK_WIDGET (window);
 }
 
-typedef struct
-{
-  ClapperAppPreferencesWindow *prefs;
-  const ClapperAppShortcutInfo *info;
-  gboolean append;
-} ClapperAppShortcutEditData;
-
-static void
-_refresh_shortcut_row (AdwActionRow *row)
-{
-  ClapperAppShortcuts *shortcuts = clapper_app_shortcuts_get_default ();
-  const ClapperAppShortcutInfo *info = g_object_get_data (G_OBJECT (row), "info");
-  GtkWidget *label = g_object_get_data (G_OBJECT (row), "label");
-  GtkWidget *add_button = g_object_get_data (G_OBJECT (row), "add-button");
-  GtkWidget *reset_button = g_object_get_data (G_OBJECT (row), "reset-button");
-  gchar **accels = clapper_app_shortcuts_get_accels (shortcuts, info);
-  gchar *joined = g_strjoinv (" ", accels);
-
-  gtk_shortcut_label_set_accelerator (GTK_SHORTCUT_LABEL (label), joined);
-  gtk_widget_set_sensitive (add_button,
-      g_strv_length (accels) < CLAPPER_APP_SHORTCUTS_MAX_ACCELS);
-  gtk_widget_set_visible (reset_button,
-      clapper_app_shortcuts_is_customized (shortcuts, info));
-
-  g_free (joined);
-  g_strfreev (accels);
-}
-
-static void
-_shortcuts_changed_cb (ClapperAppShortcuts *shortcuts, ClapperAppPreferencesWindow *self)
-{
-  guint i;
-
-  for (i = 0; i < self->shortcut_rows->len; ++i)
-    _refresh_shortcut_row (g_ptr_array_index (self->shortcut_rows, i));
-}
-
-static void
-_shortcut_captured_cb (const gchar *accel, ClapperAppShortcutEditData *edit)
-{
-  ClapperAppShortcuts *shortcuts = clapper_app_shortcuts_get_default ();
-
-  if (accel) {
-    const ClapperAppShortcutInfo *taken_from;
-
-    taken_from = clapper_app_shortcuts_assign (shortcuts, edit->info, accel, edit->append);
-
-    if (taken_from) {
-      gchar *text = g_strdup_printf (
-          _("Key combination was used by “%s”, it was removed from there"),
-          _(taken_from->title));
-
-      adw_preferences_window_add_toast (ADW_PREFERENCES_WINDOW (edit->prefs),
-          adw_toast_new (text));
-      g_free (text);
-    }
-  } else {
-    static const gchar * const none[] = { NULL };
-
-    clapper_app_shortcuts_set_accels (shortcuts, edit->info, none);
-  }
-}
-
-static void
-_present_shortcut_dialog (AdwActionRow *row, gboolean append)
-{
-  ClapperAppPreferencesWindow *self = g_object_get_data (G_OBJECT (row), "prefs");
-  ClapperAppShortcutEditData *edit = g_new (ClapperAppShortcutEditData, 1);
-
-  edit->prefs = self;
-  edit->info = g_object_get_data (G_OBJECT (row), "info");
-  edit->append = append;
-
-  clapper_app_shortcut_dialog_present (GTK_WINDOW (self), _(edit->info->title),
-      (ClapperAppShortcutDialogFunc) _shortcut_captured_cb, edit, g_free);
-}
-
-static void
-_shortcut_row_activated_cb (AdwActionRow *row, gpointer user_data)
-{
-  _present_shortcut_dialog (row, FALSE);
-}
-
-static void
-_shortcut_add_clicked_cb (GtkButton *button, AdwActionRow *row)
-{
-  _present_shortcut_dialog (row, TRUE);
-}
-
-static void
-_shortcut_reset_clicked_cb (GtkButton *button, AdwActionRow *row)
-{
-  clapper_app_shortcuts_reset (clapper_app_shortcuts_get_default (),
-      g_object_get_data (G_OBJECT (row), "info"));
-}
-
-static void
-_shortcuts_reset_all_clicked_cb (GtkButton *button, gpointer user_data)
-{
-  clapper_app_shortcuts_reset_all (clapper_app_shortcuts_get_default ());
-}
-
-static void
-_build_shortcuts_page (ClapperAppPreferencesWindow *self)
-{
-  ClapperAppShortcuts *shortcuts = clapper_app_shortcuts_get_default ();
-  AdwPreferencesGroup *groups[CLAPPER_APP_SHORTCUT_N_GROUPS] = { NULL, };
-  GtkWidget *intro, *reset_all_button;
-  guint i, n_infos = clapper_app_shortcuts_get_n_infos ();
-
-  self->shortcut_rows = g_ptr_array_new ();
-
-  intro = adw_preferences_group_new ();
-  adw_preferences_group_set_description (ADW_PREFERENCES_GROUP (intro),
-      _("Select a shortcut to change it. Shortcuts work regardless of the active keyboard layout."));
-
-  reset_all_button = gtk_button_new_with_label (_("Reset All"));
-  gtk_widget_set_valign (reset_all_button, GTK_ALIGN_CENTER);
-  g_signal_connect (reset_all_button, "clicked",
-      G_CALLBACK (_shortcuts_reset_all_clicked_cb), NULL);
-  adw_preferences_group_set_header_suffix (ADW_PREFERENCES_GROUP (intro), reset_all_button);
-  adw_preferences_group_set_title (ADW_PREFERENCES_GROUP (intro), _("Keyboard Shortcuts"));
-  adw_preferences_page_add (self->shortcuts_page, ADW_PREFERENCES_GROUP (intro));
-
-  for (i = 0; i < n_infos; ++i) {
-    const ClapperAppShortcutInfo *info = clapper_app_shortcuts_get_info (i);
-    GtkWidget *row, *label, *add_button, *reset_button;
-
-    if (!groups[info->group]) {
-      groups[info->group] = ADW_PREFERENCES_GROUP (adw_preferences_group_new ());
-      adw_preferences_group_set_title (groups[info->group],
-          clapper_app_shortcuts_group_get_title (info->group));
-      adw_preferences_page_add (self->shortcuts_page, groups[info->group]);
-    }
-
-    row = adw_action_row_new ();
-    adw_preferences_row_set_title (ADW_PREFERENCES_ROW (row), _(info->title));
-    gtk_list_box_row_set_activatable (GTK_LIST_BOX_ROW (row), TRUE);
-
-    label = gtk_shortcut_label_new ("");
-    gtk_shortcut_label_set_disabled_text (GTK_SHORTCUT_LABEL (label), _("Disabled"));
-    gtk_widget_set_valign (label, GTK_ALIGN_CENTER);
-
-    add_button = gtk_button_new_from_icon_name ("list-add-symbolic");
-    gtk_widget_set_valign (add_button, GTK_ALIGN_CENTER);
-    gtk_widget_add_css_class (add_button, "flat");
-    gtk_widget_set_tooltip_text (add_button, _("Add Alternative Shortcut"));
-
-    reset_button = gtk_button_new_from_icon_name ("edit-undo-symbolic");
-    gtk_widget_set_valign (reset_button, GTK_ALIGN_CENTER);
-    gtk_widget_add_css_class (reset_button, "flat");
-    gtk_widget_set_tooltip_text (reset_button, _("Reset to Default"));
-
-    adw_action_row_add_suffix (ADW_ACTION_ROW (row), label);
-    adw_action_row_add_suffix (ADW_ACTION_ROW (row), add_button);
-    adw_action_row_add_suffix (ADW_ACTION_ROW (row), reset_button);
-
-    g_object_set_data (G_OBJECT (row), "prefs", self);
-    g_object_set_data (G_OBJECT (row), "info", (gpointer) info);
-    g_object_set_data (G_OBJECT (row), "label", label);
-    g_object_set_data (G_OBJECT (row), "add-button", add_button);
-    g_object_set_data (G_OBJECT (row), "reset-button", reset_button);
-
-    g_signal_connect (row, "activated", G_CALLBACK (_shortcut_row_activated_cb), NULL);
-    g_signal_connect (add_button, "clicked", G_CALLBACK (_shortcut_add_clicked_cb), row);
-    g_signal_connect (reset_button, "clicked", G_CALLBACK (_shortcut_reset_clicked_cb), row);
-
-    adw_preferences_group_add (groups[info->group], row);
-    g_ptr_array_add (self->shortcut_rows, row);
-
-    _refresh_shortcut_row (ADW_ACTION_ROW (row));
-  }
-
-  g_signal_connect_object (shortcuts, "changed",
-      G_CALLBACK (_shortcuts_changed_cb), self, 0);
-}
-
 static void
 clapper_app_preferences_window_init (ClapperAppPreferencesWindow *self)
 {
@@ -1086,7 +907,7 @@ clapper_app_preferences_window_init (ClapperAppPreferencesWindow *self)
       (GSettingsBindSetMapping) _set_font_mapping,
       NULL, NULL);
 
-  _build_shortcuts_page (self);
+  clapper_app_shortcuts_editor_populate (self->shortcuts_page, ADW_PREFERENCES_WINDOW (self));
 }
 
 static void
@@ -1095,7 +916,6 @@ clapper_app_preferences_window_dispose (GObject *object)
   ClapperAppPreferencesWindow *self = CLAPPER_APP_PREFERENCES_WINDOW_CAST (object);
 
   g_clear_pointer (&self->rank_rows, g_ptr_array_unref);
-  g_clear_pointer (&self->shortcut_rows, g_ptr_array_unref);
   gtk_widget_dispose_template (GTK_WIDGET (self), CLAPPER_APP_TYPE_PREFERENCES_WINDOW);
 
   G_OBJECT_CLASS (parent_class)->dispose (object);
