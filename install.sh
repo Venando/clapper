@@ -10,6 +10,14 @@
 # Everything runs inside main(), so a dropped download can never run half a script.
 set -euo pipefail
 
+workdir=""
+cleanup() { [ -n "$workdir" ] && rm -rf "$workdir"; return 0; }
+trap cleanup EXIT
+
+# When piped from curl, stdin is the script itself; interactive tools must use the terminal.
+TTY_IN=/dev/stdin
+[ -t 0 ] || { [ -r /dev/tty ] && TTY_IN=/dev/tty; }
+
 REPO_URL="https://github.com/Venando/clapper.git"
 RAW_URL="https://raw.githubusercontent.com/Venando/clapper/master"
 
@@ -20,15 +28,13 @@ need() { command -v "$1" >/dev/null 2>&1 || die "'$1' is required but not instal
 install_arch() {
   need makepkg "Install the 'base-devel' package group."
   need curl "Install curl."
-  local workdir
   workdir=$(mktemp -d)
-  trap 'rm -rf "$workdir"' EXIT
 
   say "Fetching the PKGBUILD"
   curl -fsSL "$RAW_URL/packaging/arch/PKGBUILD" -o "$workdir/PKGBUILD"
 
   say "Building and installing (pacman will ask for sudo and may offer to replace 'clapper')"
-  (cd "$workdir" && makepkg -si)
+  (cd "$workdir" && makepkg -si <"$TTY_IN")
 }
 
 install_generic() {
@@ -39,9 +45,7 @@ install_generic() {
   need pkg-config "Install pkg-config."
   need sudo "Install sudo, or build manually, see FORK.md."
 
-  local workdir
   workdir=$(mktemp -d)
-  trap 'rm -rf "$workdir"' EXIT
 
   say "Cloning the fork"
   git clone --depth 1 "$REPO_URL" "$workdir/clapper"
@@ -54,7 +58,7 @@ install_generic() {
   meson compile -C "$workdir/build"
 
   say "Installing into /usr/local (sudo)"
-  sudo meson install -C "$workdir/build"
+  sudo meson install -C "$workdir/build" <"$TTY_IN"
   command -v ldconfig >/dev/null 2>&1 && sudo ldconfig || true
 }
 
