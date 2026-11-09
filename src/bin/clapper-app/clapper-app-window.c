@@ -28,6 +28,7 @@
 #include "clapper-app-file-dialog.h"
 #include "clapper-app-utils.h"
 #include "clapper-app-shortcuts.h"
+#include "clapper-app-shortcuts-editor.h"
 
 #define MIN_WINDOW_WIDTH 352
 #define MIN_WINDOW_HEIGHT 198
@@ -76,6 +77,8 @@ struct _ClapperAppWindow
   gboolean subtitle_pending_jump;
   gboolean subtitle_pending_forward;
   guint resize_tick_id;
+
+  GtkWindow *shortcuts_window;
 
   gboolean key_held;
   guint seek_keycode;
@@ -950,6 +953,15 @@ key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
   if (self->key_held && !info->repeatable)
     return TRUE;
 
+  /* Shortcuts that run an action (app.*, win.* or window.*). GTK handles
+   * those by itself when it recognizes the key, this is for the rest, which
+   * is how they keep working when e.g. non-latin keyboard layout is active. */
+  if (info->action) {
+    gtk_widget_activate_action (GTK_WIDGET (self), info->action, NULL);
+    self->key_held = TRUE;
+    return TRUE;
+  }
+
   switch (info->key) {
     case CLAPPER_APP_SHORTCUT_KEY_VOLUME_UP:
       gtk_widget_activate_action (self->video, "av.volume-up", NULL);
@@ -1448,55 +1460,32 @@ auto_resize (GSimpleAction *action, GVariant *param, gpointer user_data)
   _resize_window (CLAPPER_APP_WINDOW_CAST (user_data));
 }
 
-/* Entries of help overlay are listed without accelerators, as these are
- * configurable. Fill them with what is currently in use. */
-static void
-_fill_help_overlay_accels (GtkBuilder *builder)
-{
-  static const gchar *suffixes[] = { "", "-ltr", "-rtl" };
-  ClapperAppShortcuts *shortcuts = clapper_app_shortcuts_get_default ();
-  guint i, j, n_infos = clapper_app_shortcuts_get_n_infos ();
-
-  for (i = 0; i < n_infos; ++i) {
-    const ClapperAppShortcutInfo *info = clapper_app_shortcuts_get_info (i);
-    gchar **accels = clapper_app_shortcuts_get_accels (shortcuts, info);
-    gchar *joined = g_strjoinv (" ", accels);
-
-    for (j = 0; j < G_N_ELEMENTS (suffixes); ++j) {
-      gchar *object_id = g_strconcat ("sc-", info->id, suffixes[j], NULL);
-      GObject *object = gtk_builder_get_object (builder, object_id);
-
-      if (object) {
-        /* Nothing to show for disabled shortcuts */
-        gtk_widget_set_visible (GTK_WIDGET (object), (accels[0] != NULL));
-        g_object_set (object, "accelerator", joined, NULL);
-      }
-
-      g_free (object_id);
-    }
-
-    g_free (joined);
-    g_strfreev (accels);
-  }
-}
-
 static void
 show_help_overlay (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
   ClapperAppWindow *self = CLAPPER_APP_WINDOW_CAST (user_data);
-  GtkBuilder *builder;
-  GtkWidget *help_overlay;
+  GtkWidget *window, *page;
 
-  builder = gtk_builder_new_from_resource (
-      CLAPPER_APP_RESOURCE_PREFIX "/ui/clapper-app-help-overlay.ui");
-  help_overlay = GTK_WIDGET (gtk_builder_get_object (builder, "help_overlay"));
+  /* Do not stack them up when opened again */
+  if (self->shortcuts_window) {
+    gtk_window_present (self->shortcuts_window);
+    return;
+  }
 
-  _fill_help_overlay_accels (builder);
+  window = adw_preferences_window_new ();
+  gtk_window_set_title (GTK_WINDOW (window), _("Keyboard Shortcuts"));
+  gtk_window_set_default_size (GTK_WINDOW (window), 560, 640);
+  gtk_window_set_transient_for (GTK_WINDOW (window), GTK_WINDOW (self));
+  gtk_window_set_destroy_with_parent (GTK_WINDOW (window), TRUE);
 
-  gtk_window_set_transient_for (GTK_WINDOW (help_overlay), GTK_WINDOW (self));
-  gtk_window_present (GTK_WINDOW (help_overlay));
+  page = adw_preferences_page_new ();
+  adw_preferences_window_add (ADW_PREFERENCES_WINDOW (window), ADW_PREFERENCES_PAGE (page));
+  clapper_app_shortcuts_editor_populate (ADW_PREFERENCES_PAGE (page), ADW_PREFERENCES_WINDOW (window));
 
-  g_object_unref (builder);
+  self->shortcuts_window = GTK_WINDOW (window);
+  g_object_add_weak_pointer (G_OBJECT (window), (gpointer *) &self->shortcuts_window);
+
+  gtk_window_present (GTK_WINDOW (window));
 }
 
 GtkWidget *
@@ -1767,6 +1756,8 @@ clapper_app_window_dispose (GObject *object)
 
   g_cancellable_cancel (self->subtitle_load_cancellable);
   g_clear_object (&self->subtitle_load_cancellable);
+
+  g_clear_weak_pointer (&self->shortcuts_window);
 
   gtk_widget_dispose_template (GTK_WIDGET (object), CLAPPER_APP_TYPE_WINDOW);
 

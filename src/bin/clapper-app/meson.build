@@ -81,6 +81,7 @@ clapperapp_sources = [
   'clapper-app-queue-progression-model.c',
   'clapper-app-queue-selection.c',
   'clapper-app-shortcut-dialog.c',
+  'clapper-app-shortcuts-editor.c',
   'clapper-app-shortcuts.c',
   'clapper-app-types.c',
   'clapper-app-uri-dialog.c',
