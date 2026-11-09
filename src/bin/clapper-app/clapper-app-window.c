@@ -27,6 +27,7 @@
 #include "clapper-app-window.h"
 #include "clapper-app-file-dialog.h"
 #include "clapper-app-utils.h"
+#include "clapper-app-shortcuts.h"
 
 #define MIN_WINDOW_WIDTH 352
 #define MIN_WINDOW_HEIGHT 198
@@ -77,6 +78,7 @@ struct _ClapperAppWindow
   guint resize_tick_id;
 
   gboolean key_held;
+  guint seek_keycode;
   gboolean scrolling;
   gboolean seeking;
 
@@ -921,69 +923,73 @@ _handle_progression_key_press (ClapperAppWindow *self)
   clapper_gtk_billboard_post_message (self->billboard, icon, label);
 }
 
+/* Shortcut handlers below are written in terms of logical direction.
+ * The functions they call already mirror it in RTL languages on their own
+ * (as they are also used for gestures), so mirror it back here: defaults
+ * of directional shortcuts are already mirrored in RTL (see shortcuts). */
+static inline gboolean
+_key_direction (gboolean forward)
+{
+  return forward ^ (gtk_widget_get_default_direction () == GTK_TEXT_DIR_RTL);
+}
+
 static gboolean
 key_pressed_cb (GtkEventControllerKey *controller, guint keyval,
     guint keycode, GdkModifierType state, ClapperAppWindow *self)
 {
-  switch (keyval) {
-    case GDK_KEY_Up:
-      if ((state & GDK_MODIFIER_MASK) == 0)
-        gtk_widget_activate_action (self->video, "av.volume-up", NULL);
+  const ClapperAppShortcutInfo *info;
+  GdkEvent *event;
+
+  event = gtk_event_controller_get_current_event (GTK_EVENT_CONTROLLER (controller));
+  info = clapper_app_shortcuts_match_event (clapper_app_shortcuts_get_default (), event);
+
+  if (!info)
+    return FALSE;
+
+  /* Some actions are slow or toggle, so ignore key auto-repeat for them */
+  if (self->key_held && !info->repeatable)
+    return TRUE;
+
+  switch (info->key) {
+    case CLAPPER_APP_SHORTCUT_KEY_VOLUME_UP:
+      gtk_widget_activate_action (self->video, "av.volume-up", NULL);
       break;
-    case GDK_KEY_Down:
-      if ((state & GDK_MODIFIER_MASK) == 0)
-        gtk_widget_activate_action (self->video, "av.volume-down", NULL);
+    case CLAPPER_APP_SHORTCUT_KEY_VOLUME_DOWN:
+      gtk_widget_activate_action (self->video, "av.volume-down", NULL);
       break;
-    case GDK_KEY_Left:
-      if ((state & GDK_MODIFIER_MASK) == 0) {
-        _handle_seek_key_press (self, FALSE);
-      } else if (!self->key_held && (state & GDK_SHIFT_MASK) == GDK_SHIFT_MASK) {
-        _handle_chapter_key_press (self, FALSE);
-      } else if ((state & GDK_CONTROL_MASK) == GDK_CONTROL_MASK) {
-        _handle_item_key_press (self, FALSE);
-      }
+    case CLAPPER_APP_SHORTCUT_KEY_SEEK_FORWARD:
+    case CLAPPER_APP_SHORTCUT_KEY_SEEK_BACKWARD:
+      self->seek_keycode = keycode;
+      _handle_seek_key_press (self, _key_direction (
+          info->key == CLAPPER_APP_SHORTCUT_KEY_SEEK_FORWARD));
       break;
-    case GDK_KEY_j:
-      if ((state & GDK_MODIFIER_MASK) == 0)
-        _handle_seek_key_press (self, FALSE);
+    case CLAPPER_APP_SHORTCUT_KEY_NEXT_ITEM:
+    case CLAPPER_APP_SHORTCUT_KEY_PREVIOUS_ITEM:
+      _handle_item_key_press (self, _key_direction (
+          info->key == CLAPPER_APP_SHORTCUT_KEY_NEXT_ITEM));
       break;
-    case GDK_KEY_Right:
-      if ((state & GDK_MODIFIER_MASK) == 0) {
-        _handle_seek_key_press (self, TRUE);
-      } else if (!self->key_held && (state & GDK_SHIFT_MASK) == GDK_SHIFT_MASK) {
-        _handle_chapter_key_press (self, TRUE);
-      } else if ((state & GDK_CONTROL_MASK) == GDK_CONTROL_MASK) {
-        _handle_item_key_press (self, TRUE);
-      }
+    case CLAPPER_APP_SHORTCUT_KEY_NEXT_CHAPTER:
+    case CLAPPER_APP_SHORTCUT_KEY_PREVIOUS_CHAPTER:
+      _handle_chapter_key_press (self, _key_direction (
+          info->key == CLAPPER_APP_SHORTCUT_KEY_NEXT_CHAPTER));
       break;
-    case GDK_KEY_l:
-      if ((state & GDK_MODIFIER_MASK) == 0)
-        _handle_seek_key_press (self, TRUE);
+    case CLAPPER_APP_SHORTCUT_KEY_ADVANCE_FRAME:
+      _handle_advance_frame_key_press (self);
       break;
-    case GDK_KEY_e:
-      if ((state & GDK_MODIFIER_MASK) == 0)
-        _handle_advance_frame_key_press (self);
+    case CLAPPER_APP_SHORTCUT_KEY_TOGGLE_PLAY:
+      gtk_widget_activate_action (self->video, "av.toggle-play", NULL);
       break;
-    case GDK_KEY_space:
-    case GDK_KEY_k:
-      if (!self->key_held && (state & GDK_MODIFIER_MASK) == 0)
-        gtk_widget_activate_action (self->video, "av.toggle-play", NULL);
+    case CLAPPER_APP_SHORTCUT_KEY_SPEED_UP:
+    case CLAPPER_APP_SHORTCUT_KEY_SPEED_DOWN:
+      /* Needs seek (action is slow) */
+      _handle_speed_key_press (self, _key_direction (
+          info->key == CLAPPER_APP_SHORTCUT_KEY_SPEED_UP));
       break;
-    case GDK_KEY_less:
-      if (!self->key_held) // Needs seek (action is slow)
-        _handle_speed_key_press (self, FALSE);
+    case CLAPPER_APP_SHORTCUT_KEY_TOGGLE_MUTE:
+      gtk_widget_activate_action (self->video, "av.toggle-mute", NULL);
       break;
-    case GDK_KEY_greater:
-      if (!self->key_held) // Needs seek (action is slow)
-        _handle_speed_key_press (self, TRUE);
-      break;
-    case GDK_KEY_m:
-      if (!self->key_held && (state & GDK_MODIFIER_MASK) == 0)
-        gtk_widget_activate_action (self->video, "av.toggle-mute", NULL);
-      break;
-    case GDK_KEY_p:
-      if (!self->key_held && (state & GDK_MODIFIER_MASK) == 0)
-        _handle_progression_key_press (self);
+    case CLAPPER_APP_SHORTCUT_KEY_PROGRESSION_MODE:
+      _handle_progression_key_press (self);
       break;
     default:
       return FALSE;
@@ -998,15 +1004,10 @@ static void
 key_released_cb (GtkEventControllerKey *controller, guint keyval,
     guint keycode, GdkModifierType state, ClapperAppWindow *self)
 {
-  switch (keyval) {
-    case GDK_KEY_Left:
-    case GDK_KEY_j:
-    case GDK_KEY_Right:
-    case GDK_KEY_l:
-      _end_seek_operation (self);
-      break;
-    default:
-      break;
+  /* Compare hardware keys as released keyval depends on active layout */
+  if (self->seek_keycode != 0 && self->seek_keycode == keycode) {
+    self->seek_keycode = 0;
+    _end_seek_operation (self);
   }
 
   self->key_held = FALSE;
@@ -1447,6 +1448,38 @@ auto_resize (GSimpleAction *action, GVariant *param, gpointer user_data)
   _resize_window (CLAPPER_APP_WINDOW_CAST (user_data));
 }
 
+/* Entries of help overlay are listed without accelerators, as these are
+ * configurable. Fill them with what is currently in use. */
+static void
+_fill_help_overlay_accels (GtkBuilder *builder)
+{
+  static const gchar *suffixes[] = { "", "-ltr", "-rtl" };
+  ClapperAppShortcuts *shortcuts = clapper_app_shortcuts_get_default ();
+  guint i, j, n_infos = clapper_app_shortcuts_get_n_infos ();
+
+  for (i = 0; i < n_infos; ++i) {
+    const ClapperAppShortcutInfo *info = clapper_app_shortcuts_get_info (i);
+    gchar **accels = clapper_app_shortcuts_get_accels (shortcuts, info);
+    gchar *joined = g_strjoinv (" ", accels);
+
+    for (j = 0; j < G_N_ELEMENTS (suffixes); ++j) {
+      gchar *object_id = g_strconcat ("sc-", info->id, suffixes[j], NULL);
+      GObject *object = gtk_builder_get_object (builder, object_id);
+
+      if (object) {
+        /* Nothing to show for disabled shortcuts */
+        gtk_widget_set_visible (GTK_WIDGET (object), (accels[0] != NULL));
+        g_object_set (object, "accelerator", joined, NULL);
+      }
+
+      g_free (object_id);
+    }
+
+    g_free (joined);
+    g_strfreev (accels);
+  }
+}
+
 static void
 show_help_overlay (GSimpleAction *action, GVariant *param, gpointer user_data)
 {
@@ -1457,6 +1490,8 @@ show_help_overlay (GSimpleAction *action, GVariant *param, gpointer user_data)
   builder = gtk_builder_new_from_resource (
       CLAPPER_APP_RESOURCE_PREFIX "/ui/clapper-app-help-overlay.ui");
   help_overlay = GTK_WIDGET (gtk_builder_get_object (builder, "help_overlay"));
+
+  _fill_help_overlay_accels (builder);
 
   gtk_window_set_transient_for (GTK_WINDOW (help_overlay), GTK_WINDOW (self));
   gtk_window_present (GTK_WINDOW (help_overlay));

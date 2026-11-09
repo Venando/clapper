@@ -134,6 +134,12 @@
       </object>
     </child>
     <child>
+      <object class="AdwPreferencesPage" id="shortcuts_page">
+        <property name="title" translatable="yes">Shortcuts</property>
+        <property name="icon-name">input-keyboard-symbolic</property>
+      </object>
+    </child>
+    <child>
       <object class="AdwPreferencesPage">
         <property name="title" translatable="yes">Tweaks</property>
         <property name="icon-name">applications-engineering-symbolic</property>

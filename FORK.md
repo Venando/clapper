@@ -23,7 +23,20 @@ below there.
 * Embedded subtitle cue times are prefetched in the background so jumping is instant.
 * Jumping back never lands on the subtitle that is currently on screen.
 
-All shortcuts are listed in the in-app shortcuts overlay (`Ctrl+?`).
+**Shortcuts**
+* Shortcuts work with any keyboard layout. For example `K` still toggles play while a Russian or
+  Ukrainian layout is active, because shortcuts are matched by the physical key and not only by the
+  letter it types.
+* Shortcuts can be changed in **Preferences → Shortcuts**. Click a shortcut and press the new key
+  combination (`Esc` cancels), use `+` to add an alternative key, the undo button to restore the
+  default, or **Reset All**. A key combination can only trigger one thing, so assigning one that is
+  already in use takes it away from the other shortcut (you are told when that happens).
+* Customized shortcuts are stored in the `shortcuts` GSettings key
+  (`gsettings get com.github.rafostar.Clapper shortcuts`). Only changes are stored, so new default
+  shortcuts keep working.
+
+All shortcuts are listed in the in-app shortcuts overlay (`Ctrl+?`), which shows your current
+bindings.
 
 ## Install
 

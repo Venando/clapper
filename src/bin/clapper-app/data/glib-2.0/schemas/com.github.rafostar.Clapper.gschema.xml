@@ -31,6 +31,12 @@
       <default>"Sans 12"</default>
       <summary>Default subtitle stream font description</summary>
     </key>
+    <!-- Shortcuts -->
+    <key name="shortcuts" type="a{sas}">
+      <default>{}</default>
+      <summary>Customized keyboard shortcuts</summary>
+      <description>Maps shortcut ID to a list of accelerators that trigger it. Shortcuts that are not listed use their default accelerators, an empty list disables a shortcut.</description>
+    </key>
     <!-- Tweaks -->
     <key name="plugin-feature-ranks" type="s">
       <default>''</default>

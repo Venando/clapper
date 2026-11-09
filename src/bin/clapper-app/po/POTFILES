@@ -15,5 +15,7 @@ src/bin/clapper-app/clapper-app-application.c
 src/bin/clapper-app/clapper-app-info-window.c
 src/bin/clapper-app/clapper-app-list-item-utils.c
 src/bin/clapper-app/clapper-app-preferences-window.c
+src/bin/clapper-app/clapper-app-shortcut-dialog.c
+src/bin/clapper-app/clapper-app-shortcuts.c
 src/bin/clapper-app/clapper-app-utils.c
 src/bin/clapper-app/clapper-app-window.c
