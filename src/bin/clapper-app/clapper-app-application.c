@@ -30,6 +30,7 @@
 #include "clapper-app-preferences-window.h"
 #include "clapper-app-about-dialog.h"
 #include "clapper-app-utils.h"
+#include "clapper-app-shortcuts.h"
 
 #define PERCENTAGE_ROUND(a) (round ((gdouble) a / 0.01) * 0.01)
 
@@ -67,12 +68,6 @@ typedef struct
   ClapperAppApplication *app;
   guint id;
 } ClapperAppWindowData;
-
-typedef struct
-{
-  const gchar *action;
-  const gchar *accels[3];
-} ClapperAppShortcut;
 
 static gboolean
 clapper_app_options_get (const gchar *key, const gchar *format, GVariantDict *options,
@@ -796,11 +791,17 @@ clapper_app_application_init (ClapperAppApplication *self)
 }
 
 static void
+shortcuts_changed_cb (ClapperAppShortcuts *shortcuts, ClapperAppApplication *self)
+{
+  clapper_app_shortcuts_apply (shortcuts, GTK_APPLICATION (self));
+}
+
+static void
 clapper_app_application_constructed (GObject *object)
 {
   ClapperAppApplication *self = CLAPPER_APP_APPLICATION_CAST (object);
   GApplication *app = G_APPLICATION (self);
-  guint i;
+  ClapperAppShortcuts *shortcuts;
 
   const GOptionEntry app_options[] = {
     { "new-window", 'n', 0, G_OPTION_ARG_NONE, NULL, _("Create a new window"), NULL },
@@ -827,26 +828,6 @@ clapper_app_application_constructed (GObject *object)
     { "preferences", show_preferences, NULL, NULL, NULL },
     { "about", show_about, NULL, NULL, NULL },
   };
-  static const ClapperAppShortcut app_shortcuts[] = {
-    { "app.add-files", { "<Control>o", NULL, NULL }},
-    { "app.add-folder", { "<Control><Shift>o", NULL, NULL }},
-    { "app.add-uri", { "<Control>u", NULL, NULL }},
-    { "app.new-window", { "<Control>n", NULL, NULL }},
-    { "app.info", { "<Control>i", NULL, NULL }},
-    { "app.pipeline", { "<Control><Shift>p", NULL, NULL }},
-    { "app.preferences", { "<Control>comma", NULL, NULL }},
-    { "app.about", { "F1", NULL, NULL }},
-    { "win.toggle-fullscreen", { "F11", "f", NULL }},
-    { "win.unfullscreen", { "Escape", NULL, NULL }},
-    { "win.auto-resize", { "<Super>r", NULL, NULL }},
-    { "win.show-help-overlay", { "<Control>question", NULL, NULL }},
-    { "win.toggle-subtitles", { "<Alt>h", NULL, NULL }},
-    { "win.cycle-subtitle-stream", { "<Alt>l", NULL, NULL }},
-    { "win.cycle-audio-stream", { "<Alt>a", NULL, NULL }},
-    { "win.next-subtitle", { "End", NULL, NULL }},
-    { "win.previous-subtitle", { "Home", NULL, NULL }},
-    { "window.close", { "<Control>q", "q", NULL }},
-  };
 
   /* Override initial ranks, they will be updated
    * from both stored settings and env below */
@@ -862,8 +843,12 @@ clapper_app_application_constructed (GObject *object)
   g_action_map_add_action_entries (G_ACTION_MAP (app),
       app_actions, G_N_ELEMENTS (app_actions), app);
 
-  for (i = 0; i < G_N_ELEMENTS (app_shortcuts); ++i)
-    gtk_application_set_accels_for_action (GTK_APPLICATION (app), app_shortcuts[i].action, app_shortcuts[i].accels);
+  shortcuts = clapper_app_shortcuts_get_default ();
+  clapper_app_shortcuts_apply (shortcuts, GTK_APPLICATION (app));
+
+  /* Keep action accelerators in sync with changes made in preferences */
+  g_signal_connect_object (shortcuts, "changed",
+      G_CALLBACK (shortcuts_changed_cb), app, 0);
 
   g_application_set_option_context_parameter_string (app, "[URI1|FILE1] [URI2|FILE2] …");
 
