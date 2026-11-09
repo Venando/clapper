@@ -40,6 +40,30 @@ _update_elements_caps_locked (GstClapperGLUploader *self, GstCaps *upload_sink_c
 
   upload_src_caps = gst_gl_upload_transform_caps (self->upload, gst_context,
       GST_PAD_SINK, upload_sink_caps, NULL);
+
+  /* GLUpload can also offer non-GL (e.g. DMABuf passthrough) candidates first,
+   * which GLColorConvert cannot handle. Only keep GL memory ones if available. */
+  {
+    GstCaps *gl_only = gst_caps_new_empty ();
+    guint i, n = gst_caps_get_size (upload_src_caps);
+
+    for (i = 0; i < n; i++) {
+      GstCapsFeatures *features = gst_caps_get_features (upload_src_caps, i);
+
+      if (features && gst_caps_features_contains (features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY)) {
+        gst_caps_append_structure_full (gl_only,
+            gst_structure_copy (gst_caps_get_structure (upload_src_caps, i)),
+            gst_caps_features_copy (features));
+      }
+    }
+
+    if (!gst_caps_is_empty (gl_only)) {
+      gst_caps_unref (upload_src_caps);
+      upload_src_caps = gl_only;
+    } else {
+      gst_caps_unref (gl_only);
+    }
+  }
   upload_src_caps = gst_caps_fixate (upload_src_caps);
 
   GST_INFO_OBJECT (self, "GLUpload caps: %" GST_PTR_FORMAT, upload_src_caps);
